@@ -151,7 +151,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
             p.scale(width / 1920.0, size.height() / 1080.0);
             const QRectF dest = mediaImageRect(media, frame.size());
             p.setClipRect(rect);
-            p.drawImage(dest, media.placed() || media.text.trimmed().isEmpty()
+            p.drawImage(dest, media.beside() || media.text.trimmed().isEmpty()
                                   ? frame
                                   : softenedImage(frame, dest.size()));
             p.restore();

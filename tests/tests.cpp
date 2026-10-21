@@ -1140,6 +1140,41 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(m.error.isEmpty());
         QVERIFY(m.span);
     }
+    void splitImageDirectives() {
+        auto m = parseMedia("# Headline\n\n![split=left](logo.svg)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.split, QString("left"));
+        QCOMPARE(m.share, 50.0);
+        QVERIFY(m.beside());
+        QVERIFY(!m.placed());
+        QVERIFY(!m.span); // A headline never makes a split image span.
+        QCOMPARE(m.overlay, 0.0);
+        QCOMPARE(mediaRect(m), QRectF(90, 90, 960 - 90 - 30, 900));
+        QCOMPARE(splitTextRect(m), QRectF(960 + 50, 90, 960 - 50 - 120, 900));
+        m = parseMedia("# Headline\n\n![split=right size=40%](chart.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.share, 40.0);
+        QCOMPARE(m.size, 0.0); // size is the share here, not a placement
+        QCOMPARE(mediaRect(m), QRectF(1152 + 30, 90, 768 - 30 - 90, 900));
+        QCOMPARE(splitTextRect(m), QRectF(130, 90, 1152 - 50 - 130, 900));
+        m = parseMedia("# Headline\n\n![size=70% split=bottom](grid.svg)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QVERIFY(!m.placed()); // size before split still means the share
+        QCOMPARE(m.share, 70.0);
+        QCOMPARE(parseMedia("![split=bottom](grid.svg)", "/tmp/deck").share, 60.0);
+        for (const QString &bad :
+             {QString("split=top"), QString("split=left fit"), QString("split=left span"),
+              QString("split=left position=top"), QString("split=left overlay=0.5"),
+              QString("split=right background=#fff")})
+            QVERIFY2(!parseMedia("![" + bad + "](logo.png)", "/tmp/deck").error.isEmpty(),
+                     qPrintable(bad));
+        QVERIFY(!parseMedia("![split=left](demo.mp4)", "/tmp/deck").error.isEmpty());
+        // Replacing the picture keeps its side and share.
+        m = parseMedia(withReplacedMedia("# A\n\n![split=right size=40%](old.png)\n", "new.png"), {});
+        QCOMPARE(m.file, QString("new.png"));
+        QCOMPARE(m.split, QString("right"));
+        QCOMPARE(m.share, 40.0);
+    }
     void placedImageDirectives() {
         auto m =
             parseMedia("# Headline\n\n![position=bottom-right size=10%](logo.png)", "/tmp/deck");

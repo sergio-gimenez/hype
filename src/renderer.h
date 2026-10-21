@@ -18,9 +18,16 @@ struct Media {
     QString position;
     double size = 0;
     Qt::Alignment alignment = Qt::AlignCenter;
+    // A split image takes one side of the slide (left, right, or bottom) and the text the
+    // other; share is that side's percentage of the slide.
+    QString split;
+    double share = 0;
     bool placed() const { return !position.isEmpty(); }
+    bool beside() const { return placed() || !split.isEmpty(); }
 };
 constexpr double defaultPlacedSize = 10;
+const QStringList &mediaSplits();
+QRectF splitTextRect(const Media &media);
 const QStringList &mediaPositions();
 QRectF mediaRect(const Media &media);
 QRectF mediaImageRect(const Media &media, const QSizeF &image);

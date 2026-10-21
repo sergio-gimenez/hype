@@ -86,6 +86,9 @@ Each slide takes one image or video. Options go inside the brackets:
 | `![autoplay=false](demo.mp4)` | Wait for Space to play the video |
 | `![poster=still.png](demo.mp4)` | Show an image from `images/` until it plays |
 | `![position=bottom-right size=10%](logo.png)` | Place a small image, such as a logo, in a corner |
+| `![split=left](diagram.svg)` | Image on the left half, text beside it on the right |
+| `![split=right size=40%](chart.png)` | Image on the right 40%, text in the rest |
+| `![split=bottom size=70%](grid.svg)` | Headline on top, image filling the lower 70% |
 
 An `svg` code block draws SVG in the image's place, sharp at any size. Give it
 a `viewBox`. `var(--accent)`, `var(--foreground)`, `var(--background)`,
@@ -109,6 +112,13 @@ A placed image leaves the slide's text and theme colors alone. `position` is
 `bottom`, or `bottom-right`; `size` is the share of the slide it may fill, from
 1% to 100% (default 10%). Placement is for images only and cannot be combined
 with `fit`, `span`, `background`, or `overlay`.
+
+A split image shares the slide with the text instead of sitting under it: the
+text keeps the theme's colors, is never darkened, and reads from the left in a
+side column. `split` is `left`, `right`, or `bottom`; `size` is the image's
+share of the slide (default 50%, or 60% for `bottom`). Split works with still
+and animated images, not videos, and cannot be combined with `fit`, `span`,
+`position`, `background`, or `overlay`.
 
 ## Commands
 

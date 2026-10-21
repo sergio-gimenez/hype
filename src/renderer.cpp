@@ -162,11 +162,15 @@ QString withMedia(const QString &source, const QString &reference) {
     return updated;
 }
 QString withReplacedMedia(const QString &source, const QString &file) {
-    // A new logo keeps the old one's corner and size; other layouts start fresh.
+    // A new logo keeps the old one's corner and size, a split image its side; other layouts
+    // start fresh.
     const auto current = parseMedia(source, {});
     const QString flags =
-        current.placed() && !isVideoFile(file)
+        isVideoFile(file) ? QString()
+        : current.placed()
             ? QString("position=%1 size=%2%").arg(current.position, QString::number(current.size))
+        : !current.split.isEmpty()
+            ? QString("split=%1 size=%2%").arg(current.split, QString::number(current.share))
             : QString();
     return withMedia(source, "![" + flags + "](<" + file + ">)");
 }
@@ -203,6 +207,10 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
     reference.replace(2, end - 2, kept.join(' '));
     return withMedia(source, reference);
 }
+const QStringList &mediaSplits() {
+    static const QStringList names{"left", "right", "bottom"};
+    return names;
+}
 static Media readMedia(const QString &source, const QString &base) {
     Media result;
     result.text = withoutComments(source);
@@ -224,7 +232,7 @@ static Media readMedia(const QString &source, const QString &base) {
         (QStringList{"fit", "span", "loop", "muted"}.contains(first.captured(1)) ||
          !first.captured(2).isEmpty());
     QString explicitOverlay;
-    bool fit = false, span = false;
+    bool fit = false, span = false, explicitPosition = false;
     if (directives) {
         auto it = tokens.globalMatch(flags);
         int consumed = 0;
@@ -253,6 +261,7 @@ static Media readMedia(const QString &source, const QString &base) {
             else if (key == "position") {
                 // Errors name the directive, never the author's value, which may hold markup.
                 result.position = value;
+                explicitPosition = true;
                 if (!mediaPositions().contains(value))
                     result.error = "Unknown position";
             } else if (key == "size") {
@@ -266,6 +275,10 @@ static Media readMedia(const QString &source, const QString &base) {
                 }
                 if (result.position.isEmpty())
                     result.position = "center";
+            } else if (key == "split") {
+                result.split = value;
+                if (!mediaSplits().contains(value))
+                    result.error = "Unknown split";
             } else if (key == "background") {
                 result.background = value;
                 if (value != "auto" && value != "theme" && value != "blur" && !QColor(value).isValid())
@@ -280,6 +293,21 @@ static Media readMedia(const QString &source, const QString &base) {
     }
     if (fit && span)
         result.error = "Choose either span or fit";
+    if (!result.split.isEmpty()) {
+        if (result.video)
+            result.error = "Only images can be split";
+        else if (explicitPosition)
+            result.error = "Choose either split or position";
+        else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty())
+            result.error = "A split image cannot use fit, span, background, or overlay";
+        // size= is the image side's share of the slide; it is not a placement.
+        result.share = result.size > 0 ? result.size : result.split == "bottom" ? 60 : 50;
+        result.position.clear();
+        result.size = 0;
+        result.span = false;
+        result.overlay = 0;
+        return result;
+    }
     if (result.placed()) {
         if (result.video)
             result.error = "Only images can be placed";
@@ -795,7 +823,24 @@ static QRectF alignedRect(const QSizeF &size, const QRectF &within, Qt::Alignmen
                                                   : within.center().y() - size.height() / 2;
     return QRectF(QPointF(x, y), size);
 }
+// Split panes share one gutter; the image side bleeds a little closer to the slide edge.
+QRectF splitTextRect(const Media &media) {
+    const qreal at = media.share / 100;
+    if (media.split == "left")
+        return QRectF(1920 * at + 50, 90, 1920 * (1 - at) - 50 - 120, 900);
+    if (media.split == "right")
+        return QRectF(130, 90, 1920 * (1 - at) - 50 - 130, 900);
+    return QRectF(130, 60, 1660, 1080 * (1 - at) - 60 - 20);
+}
 QRectF mediaRect(const Media &media) {
+    if (!media.split.isEmpty()) {
+        const qreal at = media.share / 100;
+        if (media.split == "left")
+            return QRectF(90, 90, 1920 * at - 90 - 30, 900);
+        if (media.split == "right")
+            return QRectF(1920 * (1 - at) + 30, 90, 1920 * at - 30 - 90, 900);
+        return QRectF(100, 1080 * (1 - at) + 10, 1720, 1080 * at - 10 - 50);
+    }
     if (media.placed()) {
         const QSizeF box(1920 * media.size / 100, 1080 * media.size / 100);
         // The margin shrinks as the box grows, so large images stay on the slide.
@@ -856,7 +901,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         const QSize pixels = p->deviceTransform().mapRect(rect).size().toSize();
         // An SVG with nothing over it is drawn as vectors, sharp at any size and in PDF. Its
         // small raster only gives its shape and edge colors for the background.
-        const bool vector = !media.video && (text.isEmpty() || media.placed()) &&
+        const bool vector = !media.video && (text.isEmpty() || media.beside()) &&
                             QStringList{"svg", "svgz"}.contains(QFileInfo(path).suffix().toLower());
         QImage image = loadedImage(path, vector ? QSize(480, 270) : pixels, media.span);
         // Video backgrounds use the first frame, even with a custom poster.
@@ -867,7 +912,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             if (!backdrop.isNull())
                 p->drawImage(QRectF(0, 0, 1920, 1080), blurredBackground(backdrop));
         }
-        if ((!media.video || !media.background.isEmpty()) && !media.span && !media.placed() &&
+        if ((!media.video || !media.background.isEmpty()) && !media.span && !media.beside() &&
             media.background != "theme" && (bg.isEmpty() || !media.background.isEmpty())) {
             QColor color(media.background);
             if ((media.background.isEmpty() || media.background == "auto") && !backdrop.isNull()) {
@@ -921,7 +966,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 svg.setAspectRatioMode(Qt::KeepAspectRatio);
                 svg.render(p, dest);
             } else
-                p->drawImage(dest, !media.video && !media.placed() && !text.isEmpty()
+                p->drawImage(dest, !media.video && !media.beside() && !text.isEmpty()
                                        ? softenedImage(image, dest.size())
                                        : image);
             p->restore();
@@ -942,8 +987,11 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             p->drawText(rect, Qt::AlignCenter, message);
             p->restore();
         }
-        // Text beside a placed image keeps the theme's colors and full area.
-        if (!media.placed() && (!media.video || media.span)) {
+        // Text beside a placed image keeps the theme's colors and full area; beside a split
+        // image it keeps the colors and takes the other side.
+        if (!media.split.isEmpty())
+            area = splitTextRect(media);
+        else if (!media.placed() && (!media.video || media.span)) {
             if (!backgroundOnly)
                 p->fillRect(QRectF(0, 0, 1920, 1080), QColor(0, 0, 0, qRound(media.overlay * 255)));
             if (fg.isEmpty() && !text.isEmpty())
@@ -965,6 +1013,9 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         // A table alone on its slide sits in the middle; beside other text it lines up with it.
         const bool tableOnly = table && !text.split('\n').filter(QRegularExpression("^(?!.*\\|).*\\S")).size();
         bool centered = tableOnly || !(code || quote || list || table);
+        // Text in a side column reads from its left edge, like a page.
+        if (media.split == "left" || media.split == "right")
+            centered = false;
         const QString alignment = slideProperty(source, "alignment");
         if (alignment == "left")
             centered = false;
