@@ -666,8 +666,10 @@ static QString padTableCells(const QString &markdown) {
     }
     return lines.join('\n');
 }
+// Words stay whole while the fit search shrinks the text; only text that cannot fit even at
+// the smallest size, such as a long URL, breaks mid-word.
 static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal fontSize,
-                          qreal width, bool centered, bool code) {
+                          qreal width, bool centered, bool code, bool breakWords = false) {
     // A null page size suspends layout while every format below changes; the
     // final setTextWidth lays the document out once instead of once per run.
     doc.setPageSize(QSizeF(0, 0));
@@ -679,7 +681,9 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
     doc.setDocumentMargin(0);
     QTextOption option;
     option.setUseDesignMetrics(true);
-    option.setWrapMode(code ? QTextOption::NoWrap : QTextOption::WrapAtWordBoundaryOrAnywhere);
+    option.setWrapMode(code         ? QTextOption::NoWrap
+                       : breakWords ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                                    : QTextOption::WordWrap);
     doc.setDefaultTextOption(option);
     doc.setDefaultStyleSheet(
         QString("body { color: %1; } a { color: %2; } pre { white-space: pre; }")
@@ -1000,6 +1004,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 sizeSlideText(doc, palette, low, area.width(), centered, code);
             rememberFit(fit, low);
         }
+        if (!code && doc.idealWidth() > area.width() + 1)
+            sizeSlideText(doc, palette, low, area.width(), centered, code, true);
         highlightCode(doc, palette);
         if (low < 24 && warning)
             *warning = "Text fits below 24px on a 1080p slide";

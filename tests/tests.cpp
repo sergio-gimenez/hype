@@ -4083,6 +4083,22 @@ static void write(const QString &path, const QString &content) {
         highlightCode(plain, palette);
         QCOMPARE(plain.toPlainText(), original);
     }
+    void headlinesShrinkInsteadOfBreakingWords() {
+        Deck deck;
+        // At this size the word is wider than the column: it must overflow the trial layout,
+        // so the fit search shrinks it rather than splitting it across lines.
+        QTextDocument doc;
+        layoutSlideText(doc, "# Construcción", deck.palette(), 76, 300, false, false);
+        QVERIFY(doc.idealWidth() > 300);
+        QCOMPARE(doc.firstBlock().layout()->lineCount(), 1);
+        // Painted, the same headline in a narrow column stays on one line.
+        QImage image(1920, 1080, QImage::Format_ARGB32);
+        QPainter painter(&image);
+        QString warning;
+        paintSlide(&painter, image.rect(), "# Supercalifragilisticexpialidocious", "/tmp", deck.palette(), &warning);
+        painter.end();
+        QVERIFY(warning.isEmpty());
+    }
     void tablesKeepColumnAlignmentAndRules() {
         Deck deck;
         QTextDocument doc;
