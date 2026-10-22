@@ -95,6 +95,8 @@ class Deck : public QAbstractListModel {
     QColor foreground() const;
     QColor accent() const;
     QVariantMap palette() const;
+    // The palette plus, under a running header, where this slide sits in the deck.
+    QVariantMap slidePalette(int index) const;
     QVariantMap media() const;
     QStringList mediaPositions() const;
     QString baseDir() const;

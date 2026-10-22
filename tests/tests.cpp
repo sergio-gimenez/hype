@@ -1165,7 +1165,7 @@ static void write(const QString &path, const QString &content) {
         for (const QString &bad :
              {QString("split=top"), QString("split=left fit"), QString("split=left span"),
               QString("split=left position=top"), QString("split=left overlay=0.5"),
-              QString("split=right background=#fff")})
+              QString("split=right background=blur"), QString("split=right background=auto")})
             QVERIFY2(!parseMedia("![" + bad + "](logo.png)", "/tmp/deck").error.isEmpty(),
                      qPrintable(bad));
         QVERIFY(!parseMedia("![split=left](demo.mp4)", "/tmp/deck").error.isEmpty());
@@ -1174,6 +1174,20 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(m.file, QString("new.png"));
         QCOMPARE(m.split, QString("right"));
         QCOMPARE(m.share, 40.0);
+        // A split image's background is a plain color for its side, and survives replacement.
+        m = parseMedia("# A\n\n![split=left background=#E4DFD7](logo.svg)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.background, QString("#E4DFD7"));
+        m = parseMedia(withReplacedMedia("# A\n\n![split=left background=#E4DFD7](old.png)\n", "new.png"), {});
+        QCOMPARE(m.background, QString("#E4DFD7"));
+        QImage image(1920, 1080, QImage::Format_ARGB32);
+        QPainter painter(&image);
+        paintSlide(&painter, image.rect(), "# A\n\n![split=left size=40% background=#ff0000](gone.png)",
+                   "/tmp", Deck().palette());
+        painter.end();
+        QCOMPARE(image.pixelColor(10, 500), QColor("#ff0000"));
+        QCOMPARE(image.pixelColor(760, 500), QColor("#ff0000"));
+        QVERIFY(image.pixelColor(800, 500) != QColor("#ff0000"));
     }
     void placedImageDirectives() {
         auto m =
@@ -4133,6 +4147,120 @@ static void write(const QString &path, const QString &content) {
         paintSlide(&painter, image.rect(), "# Supercalifragilisticexpialidocious", "/tmp", deck.palette(), &warning);
         painter.end();
         QVERIFY(warning.isEmpty());
+    }
+    void pageTypographyComesFromFrontMatter() {
+        Deck deck;
+        deck.editSource("---\nfont: \"DejaVu Sans\"\nheading_font: \"DejaVu Serif\"\nheading_weight: 400\n"
+                        "text_size: 24\nheading_size: 64\nheader: \"Deck · Name\"\n---\n\n# One\n\n---\n\n# Two\n");
+        const auto palette = deck.palette();
+        QCOMPARE(palette["heading_font"].toString(), QString("DejaVu Serif"));
+        QCOMPARE(palette["heading_weight"].toInt(), 400);
+        QCOMPARE(palette["text_size"].toDouble(), 24.0);
+        QCOMPARE(palette["heading_size"].toDouble(), 64.0);
+        QCOMPARE(palette["header"].toString(), QString("Deck · Name"));
+        QCOMPARE(deck.slidePalette(1)["slide_number"].toInt(), 2);
+        QCOMPARE(deck.slidePalette(1)["slide_count"].toInt(), 2);
+        // Without them, nothing changes: headings use the font, bold, and text fills the slide.
+        Deck plain;
+        QCOMPARE(plain.palette()["heading_font"], plain.palette()["font"]);
+        QCOMPARE(plain.palette()["heading_weight"].toInt(), 700);
+        QVERIFY(!plain.palette().contains("text_size"));
+        QVERIFY(!plain.palette().contains("header"));
+        QVERIFY(!plain.slidePalette(0).contains("slide_number"));
+        // The heading size defaults to two and a half times the text, and never below it.
+        deck.editSource("---\ntext_size: 20\nheading_size: 10\n---\n\n# One\n");
+        QCOMPARE(deck.palette()["heading_size"].toDouble(), 50.0);
+        deck.editSource("---\ntext_size: 3\n---\n\n# One\n");
+        QVERIFY(!deck.palette().contains("text_size"));
+    }
+    void fixedTextSizeSetsHeadingsByRatio() {
+        Deck deck;
+        QVariantMap palette = deck.palette();
+        palette["font"] = "DejaVu Sans";
+        palette["heading_font"] = "DejaVu Serif";
+        palette["heading_weight"] = 400;
+        palette["text_size"] = 24;
+        palette["heading_size"] = 64;
+        QTextDocument doc;
+        layoutSlideText(doc, "# Title\n\nBody text", palette, 24, 1660, false, false);
+        const QTextBlock heading = doc.firstBlock(), body = heading.next();
+        const QTextCharFormat run = heading.begin().fragment().charFormat();
+        QCOMPARE(run.intProperty(QTextFormat::FontPixelSize), 64);
+        QVERIFY(!run.hasProperty(QTextFormat::FontSizeAdjustment));
+        QCOMPARE(run.fontFamilies().toStringList(), QStringList{"DejaVu Serif"});
+        QCOMPARE(run.fontWeight(), 400);
+        QCOMPARE(body.begin().fragment().charFormat().fontFamilies().toStringList(), QStringList{"DejaVu Sans"});
+        // The heading is actually laid out at its size, not at the body's.
+        const auto layout = doc.documentLayout();
+        QVERIFY(layout->blockBoundingRect(heading).height() > 1.5 * layout->blockBoundingRect(body).height());
+        // Painted, a short slide keeps the deck's size instead of growing, and sits at the top.
+        auto inkRows = [](const QImage &image, const QRect &within) {
+            int first = -1, last = -1;
+            for (int y = within.top(); y <= within.bottom(); ++y)
+                for (int x = within.left(); x <= within.right(); x += 2)
+                    if (image.pixelColor(x, y) != image.pixelColor(1919, 1079)) {
+                        if (first < 0)
+                            first = y;
+                        last = y;
+                        break;
+                    }
+            return std::pair{first, last};
+        };
+        QImage image(1920, 1080, QImage::Format_ARGB32);
+        QPainter painter(&image);
+        QString warning;
+        paintSlide(&painter, image.rect(), "# Hi", "/tmp", palette, &warning);
+        painter.end();
+        QVERIFY(warning.isEmpty());
+        const auto [top, bottom] = inkRows(image, QRect(130, 0, 1660, 1000));
+        QVERIFY2(top >= 90 && top < 130, qPrintable(QString::number(top)));
+        QVERIFY2(bottom - top < 80, qPrintable(QString::number(bottom - top)));
+        // vertical="center" puts it back in the middle; an unknown value is a problem.
+        image.fill(Qt::white);
+        painter.begin(&image);
+        paintSlide(&painter, image.rect(), "<!-- hype: vertical=\"center\" -->\n# Hi", "/tmp", palette);
+        painter.end();
+        QVERIFY(inkRows(image, QRect(130, 0, 1660, 1000)).first > 450);
+        QVERIFY(!slideProblems("<!-- hype: vertical=\"middle\" -->\n# Hi", "/tmp").isEmpty());
+        QVERIFY(slideProblems("<!-- hype: vertical=\"bottom\" -->\n# Hi", "/tmp").isEmpty());
+        // Text that must shrink below the deck's size says so.
+        warning.clear();
+        image.fill(Qt::white);
+        painter.begin(&image);
+        paintSlide(&painter, image.rect(), "# Hi\n\n" + QString("Many words here. ").repeated(400), "/tmp",
+                   palette, &warning);
+        painter.end();
+        QVERIFY2(warning.contains("below the deck's 24px"), qPrintable(warning));
+    }
+    void runningHeaderShowsSectionAndNumber() {
+        Deck deck;
+        QVariantMap palette = deck.palette();
+        palette["background"] = "#ffffff";
+        palette["foreground"] = "#000000";
+        auto inked = [](const QImage &image, const QRect &band) {
+            for (int y = band.top(); y <= band.bottom(); ++y)
+                for (int x = band.left(); x <= band.right(); ++x)
+                    if (image.pixelColor(x, y).lightness() < 200)
+                        return true;
+            return false;
+        };
+        auto paint = [&](const QVariantMap &colors, const QString &source) {
+            QImage image(1920, 1080, QImage::Format_ARGB32);
+            QPainter painter(&image);
+            paintSlide(&painter, image.rect(), source, "/tmp", colors);
+            return image;
+        };
+        const QRect left(130, 50, 400, 40), right(1590, 50, 200, 40);
+        QImage image = paint(palette, "<!-- hype: section=\"Intro\" -->\nBody");
+        QVERIFY(!inked(image, left));
+        QVERIFY(!inked(image, right));
+        palette["header"] = "Deck name";
+        palette["slide_number"] = 3;
+        image = paint(palette, "<!-- hype: section=\"Intro\" -->\nBody");
+        QVERIFY(inked(image, left));
+        QVERIFY(inked(image, right));
+        // The text below starts clear of the header.
+        QVERIFY(!inked(image, QRect(130, 95, 1660, 40)));
     }
     void tablesKeepColumnAlignmentAndRules() {
         Deck deck;

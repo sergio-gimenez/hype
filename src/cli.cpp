@@ -48,7 +48,7 @@ QImage paint(const Deck &deck, int index, int width, QString *warning) {
     QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     QPainter painter(&image);
-    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.palette(), warning);
+    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.slidePalette(index), warning);
     return image;
 }
 QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int index) {
