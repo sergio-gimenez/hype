@@ -79,8 +79,12 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE bool isHidden(int index) const;
     // The slide a presentation reaches from `from` after `steps` shown slides, skipping hidden ones.
     Q_INVOKABLE int shownSlide(int from, int steps) const;
+    // How many build steps the slide reveals, one at a time, while presenting.
+    Q_INVOKABLE int stepCount(int index) const;
     // Exports leave hidden slides out unless asked to include them.
     void setIncludeHidden(bool include) { m_includeHidden = include; }
+    // A PDF gives each build step a page of its own, as beamer does, instead of the finished slide.
+    void setExpandSteps(bool expand) { m_expandSteps = expand; }
     QVector<int> exportedSlides() const;
     int selected() const { return m_selected; }
     int selectionFirst() const { return qMin(m_anchor, m_selected); }
@@ -149,7 +153,8 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE QString savePastedMedia(const QString &name);
     Q_INVOKABLE void cancelPaste();
     Q_INVOKABLE void exportDialog(const QString &format);
-    Q_INVOKABLE QString renderId(int index) const;
+    // A negative step is the finished slide.
+    Q_INVOKABLE QString renderId(int index, int step = -1) const;
     Q_INVOKABLE void matchImageBackground(bool enabled);
     Q_INVOKABLE void setMediaBackground(const QString &mode);
     Q_INVOKABLE void setMediaMode(const QString &mode);
@@ -197,7 +202,7 @@ class Deck : public QAbstractListModel {
     QTimer m_reloadTimer, m_mediaTimer;
     QString m_notifiedFont;
     bool m_externalChange = false;
-    bool m_includeHidden = false;
+    bool m_includeHidden = false, m_expandSteps = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;
     QTimer m_autosaveTimer, m_autosaveDeadline;
     bool m_recovering = false;

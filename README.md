@@ -167,6 +167,8 @@ Talks want big text that fills each slide; a proposal or brand book wants the sa
 
 Keep a backup slide without showing it: right-click it and choose Hide slide, or add `hidden="true"` to its `hype` comment. A hidden slide stays in the deck, dimmed in the sidebar, but presenting skips it and PDF and PowerPoint exports leave it out; `hype export --include-hidden` keeps it.
 
+Build a slide up point by point, written as pandoc writes beamer slides. A line holding only `. . .` pauses: what follows appears on the next click. `incremental: true` in the front matter reveals every list an item at a time, and `::: incremental` or `::: nonincremental` around a list turns that on or off for it alone. A picture after a pause appears on its own step. Each step is laid out as the finished slide, so nothing moves as it grows. The editor and the exports show the finished slide; `hype export talk.pdf --steps` gives every step a page, as beamer does.
+
 ## Present and export
 
 Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation from the selected slide. Press **Shift+F5** to start from the first slide, or return to it while already presenting. Click the slide to go to the next one. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.

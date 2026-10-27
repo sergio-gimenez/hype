@@ -44,11 +44,14 @@ int lastLine(const QString &source, const Slide &slide) {
         --offset;
     return lineAt(source, offset);
 }
-QImage paint(const Deck &deck, int index, int width, QString *warning) {
+QImage paint(const Deck &deck, int index, int width, QString *warning, int step = -1) {
     QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     QPainter painter(&image);
-    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.slidePalette(index), warning);
+    auto palette = deck.slidePalette(index);
+    if (step >= 0)
+        palette["step"] = step;
+    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), palette, warning);
     return image;
 }
 QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int index) {
@@ -203,15 +206,17 @@ int slides(const QStringList &arguments) {
         const int last = qMax(first, lastLine(deck.source(), parsed.slides[i]));
         const QString title = slideTitle(media.text);
         const bool hidden = slideHidden(parsed.slides[i].source);
+        const int steps = deck.stepCount(i);
         list << QJsonObject{{"slide", i + 1}, {"line", first}, {"endLine", last}, {"title", title},
                             {"media", media.file.isEmpty() ? QJsonValue() : QJsonValue(media.file)},
-                            {"hidden", hidden}};
+                            {"hidden", hidden}, {"steps", steps}};
         if (!command.parser.isSet("json"))
-            print(stdout, QString("%1  %2  %3%4%5")
+            print(stdout, QString("%1  %2  %3%4%5%6")
                               .arg(i + 1, 3)
                               .arg(QString("%1-%2").arg(first).arg(last), -9)
                               .arg(title.isEmpty() ? "(no text)" : title,
                                    media.file.isEmpty() ? QString() : "  [" + media.file + "]",
+                                   steps > 1 ? QString("  (%1 steps)").arg(steps) : QString(),
                                    hidden ? "  (hidden)" : ""));
     }
     if (command.parser.isSet("json"))
@@ -222,6 +227,8 @@ int slides(const QStringList &arguments) {
 int render(const QStringList &arguments) {
     Command command("render", "Render one slide to a PNG, or every slide to a directory with slides.json.");
     command.parser.addOption({"slide", "Render only this slide (1-based)", "number"});
+    command.parser.addOption({"step", "With --slide, render this build step (1-based) instead of the "
+                                      "finished slide", "number"});
     command.parser.addOption({{"o", "output"}, "PNG file for one slide, or directory for all (default: "
                                                "slide-NNN.png, or slides/)", "path"});
     command.parser.addOption({"width", "Image width in pixels (default: 1920)", "pixels", "1920"});
@@ -252,13 +259,18 @@ int render(const QStringList &arguments) {
         return 0;
     }
     const int number = command.parser.value("slide").toInt();
+    const int step = command.parser.isSet("step") ? command.parser.value("step").toInt() : 0;
     const auto parsed = parseDeck(deck.source());
     if (!parsed.error.isEmpty())
         return fail(QString("%1:%2: %3").arg(command.argument(1)).arg(lineAt(deck.source(), parsed.errorOffset))
                         .arg(parsed.error));
     if (number < 1 || number > deck.count())
         return fail(QString("Slide %1 does not exist; there are %2 slides.").arg(number).arg(deck.count()));
-    const QString name = QString("slide-%1.png").arg(number, 3, 10, QChar('0'));
+    if (command.parser.isSet("step") && (step < 1 || step > deck.stepCount(number - 1)))
+        return fail(QString("Slide %1 has no step %2; it has %3.").arg(number).arg(command.parser.value("step"))
+                        .arg(deck.stepCount(number - 1)));
+    const QString name = step ? QString("slide-%1-step-%2.png").arg(number, 3, 10, QChar('0')).arg(step)
+                              : QString("slide-%1.png").arg(number, 3, 10, QChar('0'));
     if (output.isEmpty())
         output = name;
     else if (QFileInfo(output).isDir())
@@ -267,7 +279,7 @@ int render(const QStringList &arguments) {
     // A slide with problems still renders, with the problems on a banner, so it can be looked at.
     const auto problems = slideProblemsAt(deck, parsed, number - 1);
     QString warning;
-    const QImage image = paint(deck, number - 1, width, &warning);
+    const QImage image = paint(deck, number - 1, width, &warning, step - 1);
     if (!image.save(output, "PNG"))
         return fail("Could not save " + output);
     int errors = 0;
@@ -296,6 +308,7 @@ int exportDeck(const QStringList &arguments) {
     Command command("export", "Export a presentation as PDF or PowerPoint, chosen by the file extension.");
     command.parser.addPositionalArgument("output", "File ending in .pdf or .pptx", "<output>");
     command.includeHidden();
+    command.parser.addOption({"steps", "PDF only: a page for every build step, as beamer does"});
     command.json();
     command.parser.process(arguments);
     const QString output = command.argument(2);
@@ -306,6 +319,9 @@ int exportDeck(const QStringList &arguments) {
     if (!command.load(deck))
         return 1;
     deck.setIncludeHidden(command.parser.isSet("include-hidden"));
+    if (command.parser.isSet("steps") && format != "pdf")
+        return fail("Only a PDF can show build steps as pages.");
+    deck.setExpandSteps(command.parser.isSet("steps"));
     QDir().mkpath(QFileInfo(output).absolutePath());
     if (!(format == "pdf" ? deck.exportPdf(output) : deck.exportPptx(output)))
         return fail(deck.status());

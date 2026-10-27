@@ -70,6 +70,30 @@ has a `text_size`, where it starts at the top.
 skips it, exports leave it out, and the running header does not count it.
 `hype export` and `hype render` take `--include-hidden` to keep such slides.
 
+## Build steps
+
+A slide can build up while presenting, written as pandoc writes beamer
+slides. A line holding only `. . .` pauses; what follows it appears on the
+next step:
+
+```markdown
+# Why now
+
+The radio is the bottleneck
+
+. . .
+
+Only the operator can fix it
+```
+
+`incremental: true` in the front matter reveals every list one item at a
+time; the first item shows with what comes before it. Fence a list in
+`::: incremental` or `::: nonincremental` to set it for that list alone. A
+picture after a pause appears on its own step. Steps are laid out as the
+finished slide, so text never moves as it appears. Exports show finished
+slides; `hype export talk.pdf --steps` gives each step a page, and
+`hype render --slide 3 --step 2` renders one step.
+
 ## Slides
 
 Separate slides with a line holding only `---`, with a blank line on either
