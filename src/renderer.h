@@ -48,6 +48,21 @@ struct SlideSteps {
     QString shown(int step) const;
 };
 SlideSteps slideSteps(const QString &source, const Media &media, bool incremental);
+// A one-line label in an SVG, which the editor lets you retype on the slide.
+struct SvgLabel {
+    QString text, raw;   // As shown, and as written in the file between the tags.
+    int start = -1, end = -1; // Where raw sits in the file.
+    QRectF box;          // In the SVG's own units.
+    qreal size = 0;
+    QString anchor, fill, family;
+    int weight = 400;
+};
+// The labels of an SVG: <text> elements at one x and y holding only text, and no transforms.
+QVector<SvgLabel> svgLabels(const QString &svg, QRectF *viewBox = nullptr);
+// Where an SVG's view box lands on the 1920×1080 slide.
+QRectF svgDrawnRect(const Media &media, const QRectF &viewBox);
+// The file with one label's text replaced, everything else as it was.
+QString withSvgLabel(const QString &svg, const SvgLabel &label, const QString &text);
 // A hidden slide stays in the deck but is skipped when presenting and left out of exports.
 bool slideHidden(const QString &source);
 // Sets an attribute in the slide's <!-- hype: --> comment; an empty value removes it.

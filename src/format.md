@@ -166,6 +166,16 @@ without a color take the theme's text color, and text takes the font.
 ```
 ````
 
+An SVG file in `images/` can have its labels retyped on the slide: double-click
+one in the editor, type, and press Enter. To keep a drawing editable this way,
+write each label as its own `<text>` at one `x` and `y`, holding only its words:
+no `<tspan>`, and no `transform` on it or around it. Labels written otherwise
+still draw; they just cannot be retyped in place.
+
+```xml
+<text x="250" y="93" font-size="34" text-anchor="middle">developer's app</text>
+```
+
 Text on an image slide is overlaid in white over a slightly darkened picture.
 An image with a headline spans the slide unless you say `fit`.
 

@@ -140,6 +140,12 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void duplicateSlide();
     Q_INVOKABLE void deleteSlide();
     Q_INVOKABLE void toggleHidden();
+    // The label of the selected slide's SVG under a point, in 1920×1080 slide units: its text
+    // and where and how large it is drawn, for an editor laid over it. Empty if none is there.
+    Q_INVOKABLE QVariantMap svgLabelAt(double x, double y) const;
+    // Retypes that label in the SVG file, if the file still holds it there. Undo restores the file.
+    Q_INVOKABLE bool editSvgLabel(const QString &file, int start, int end, const QString &raw,
+                                  const QString &text);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void chooseTheme(const QString &name);
@@ -179,6 +185,9 @@ class Deck : public QAbstractListModel {
         int selected;
         int anchor;
         ParsedDeck parsed;
+        // A step that changed a picture's file rather than the presentation.
+        QString file;
+        QByteArray before, after;
     };
     mutable QString m_paletteHeader, m_mediaSource, m_mediaBase;
     mutable QString m_sizeSource, m_sizeBase;
@@ -236,4 +245,7 @@ class Deck : public QAbstractListModel {
     void watchMedia();
     void notifyChanged();
     void reloadExternal(const QString &disk);
+    State snapshot() const { return {m_source, m_selected, m_anchor, m_parsed, {}, {}, {}}; }
+    QString editableSvg() const;
+    bool writeMedia(const QString &path, const QByteArray &bytes);
 };

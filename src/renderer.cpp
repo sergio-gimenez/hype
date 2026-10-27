@@ -1037,6 +1037,109 @@ QRectF mediaImageRect(const Media &media, const QSizeF &image) {
     // Placed images hug their corner or edge; everything else is centered.
     return alignedRect(scaled, rect, media.alignment);
 }
+static qreal svgLength(const QString &value) {
+    QString number = value.trimmed();
+    if (number.endsWith("px"))
+        number.chop(2);
+    bool ok = false;
+    const qreal length = number.toDouble(&ok);
+    return ok ? length : -1;
+}
+QVector<SvgLabel> svgLabels(const QString &svg, QRectF *viewBox) {
+    QVector<SvgLabel> labels;
+    struct Style {
+        QString size = "16", anchor = "start", fill = "#000000", weight = "400", family = "sans-serif";
+        bool moved = false; // Under a transform, so x and y are not where it is drawn.
+    };
+    QVector<Style> styles{Style()};
+    QXmlStreamReader xml(svg);
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (xml.isEndElement() && styles.size() > 1)
+            styles.removeLast();
+        if (!xml.isStartElement())
+            continue;
+        const auto attributes = xml.attributes();
+        Style style = styles.last();
+        const auto take = [&](const char *name, QString &into) {
+            if (attributes.hasAttribute(name))
+                into = attributes.value(name).toString();
+        };
+        take("font-size", style.size);
+        take("text-anchor", style.anchor);
+        take("fill", style.fill);
+        take("font-weight", style.weight);
+        take("font-family", style.family);
+        style.moved = style.moved || attributes.hasAttribute("transform");
+        if (xml.name() == u"svg" && styles.size() == 1 && viewBox) {
+            const QStringList box = attributes.value("viewBox").toString().split(
+                QRegularExpression("[\\s,]+"), Qt::SkipEmptyParts);
+            if (box.size() == 4)
+                *viewBox = QRectF(box[0].toDouble(), box[1].toDouble(), box[2].toDouble(), box[3].toDouble());
+            else
+                *viewBox = QRectF(0, 0, svgLength(attributes.value("width").toString()),
+                                  svgLength(attributes.value("height").toString()));
+        }
+        if (xml.name() != u"text") {
+            styles << style;
+            continue;
+        }
+        // A label is a <text> at one x and y that holds nothing but text, so its words can be
+        // replaced in the file without touching anything around them.
+        SvgLabel label;
+        label.start = int(xml.characterOffset());
+        const qreal x = svgLength(attributes.value("x").toString()),
+                    y = svgLength(attributes.value("y").toString()), size = svgLength(style.size);
+        bool plain = !style.moved && x >= 0 && y >= 0 && size > 0;
+        while (!xml.atEnd()) {
+            xml.readNext();
+            if (xml.isEndElement())
+                break;
+            if (xml.isCharacters() && !xml.isCDATA())
+                label.text += xml.text();
+            else {
+                plain = false;
+                if (xml.isStartElement())
+                    xml.skipCurrentElement();
+            }
+        }
+        label.end = int(svg.lastIndexOf('<', xml.characterOffset() - 1));
+        if (!plain || label.text.trimmed().isEmpty() || label.end <= label.start)
+            continue;
+        label.raw = svg.mid(label.start, label.end - label.start);
+        label.size = size;
+        label.anchor = style.anchor;
+        label.fill = style.fill;
+        label.weight = style.weight == "bold" ? 700 : style.weight == "normal" ? 400 : style.weight.toInt();
+        if (label.weight < 100)
+            label.weight = 400;
+        label.family = style.family.section(',', 0, 0).remove('"').remove('\'').trimmed();
+        // Measure at a large size and scale down, so small labels keep their fractional width.
+        QFont font(label.family);
+        font.setPixelSize(100);
+        font.setWeight(QFont::Weight(label.weight));
+        const QFontMetricsF metrics(font);
+        const QString shown = label.text.simplified();
+        const qreal width = metrics.horizontalAdvance(shown) * size / 100;
+        const qreal left = style.anchor == "middle" ? x - width / 2 : style.anchor == "end" ? x - width : x;
+        label.box = QRectF(left, y - metrics.ascent() * size / 100, width,
+                           (metrics.ascent() + metrics.descent()) * size / 100);
+        labels << label;
+    }
+    return labels;
+}
+QRectF svgDrawnRect(const Media &media, const QRectF &viewBox) {
+    // Vectors fill the media's rect at the picture's own aspect, as paintSlide draws them.
+    const QRectF dest = mediaImageRect(media, viewBox.size());
+    QSizeF fitted = viewBox.size();
+    fitted.scale(dest.size(), Qt::KeepAspectRatio);
+    return QRectF(dest.center() - QPointF(fitted.width(), fitted.height()) / 2, fitted);
+}
+QString withSvgLabel(const QString &svg, const SvgLabel &label, const QString &text) {
+    QString escaped = text;
+    escaped.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    return svg.left(label.start) + escaped + svg.mid(label.end);
+}
 void paintSlide(QPainter *p, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &inputPalette, QString *warning, bool overlayOnly,
                 bool backgroundOnly) {
