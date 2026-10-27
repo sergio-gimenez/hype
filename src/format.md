@@ -33,6 +33,43 @@ overridden with a `#rrggbb` color: `color_background`, `color_foreground`,
 `color_accent`, `color_green`, `color_red`, `color_yellow`, `color_magenta`,
 `color_cyan`, `color_dark_foreground`.
 
+For documents more than talks, such as a proposal or a brand book, fix the
+typography instead of letting each slide grow its text to fill the space:
+
+```markdown
+---
+font: "Instrument Sans"
+heading_font: "Newsreader"
+heading_weight: 400
+text_size: 24
+heading_size: 64
+header: "Company · Proposal"
+---
+```
+
+`heading_font` sets headings in a second font, and `heading_weight` their
+weight from 100 to 900 (default 700). `text_size` is the body text's size in
+pixels on a 1080p slide, from 8 to 200; with it, every slide uses that size,
+headings use `heading_size` (default two and a half times the text), and text
+starts at the top of its area, so headings line up from slide to slide. Text
+still shrinks when a slide holds too much, and `hype check` warns when it does.
+`header` adds a small running header: this text on the left, and the slide's
+section and number on the right.
+
+A slide names its section, and can move its text up or down, in a `hype`
+comment:
+
+```markdown
+<!-- hype: section="Context" vertical="center" -->
+```
+
+`vertical` is `top`, `center`, or `bottom`; text is centered unless the deck
+has a `text_size`, where it starts at the top.
+
+`hidden="true"` keeps a slide in the deck but out of the talk: presenting
+skips it, exports leave it out, and the running header does not count it.
+`hype export` and `hype render` take `--include-hidden` to keep such slides.
+
 ## Slides
 
 Separate slides with a line holding only `---`, with a blank line on either
@@ -89,6 +126,7 @@ Each slide takes one image or video. Options go inside the brackets:
 | `![split=left](diagram.svg)` | Image on the left half, text beside it on the right |
 | `![split=right size=40%](chart.png)` | Image on the right 40%, text in the rest |
 | `![split=bottom size=70%](grid.svg)` | Headline on top, image filling the lower 70% |
+| `![split=left background=#e4dfd7](logo.svg)` | Image on a colored left half |
 
 An `svg` code block draws SVG in the image's place, sharp at any size. Give it
 a `viewBox`. `var(--accent)`, `var(--foreground)`, `var(--background)`,
@@ -116,9 +154,10 @@ with `fit`, `span`, `background`, or `overlay`.
 A split image shares the slide with the text instead of sitting under it: the
 text keeps the theme's colors, is never darkened, and reads from the left in a
 side column. `split` is `left`, `right`, or `bottom`; `size` is the image's
-share of the slide (default 50%, or 60% for `bottom`). Split works with still
-and animated images, not videos, and cannot be combined with `fit`, `span`,
-`position`, `background`, or `overlay`.
+share of the slide (default 50%, or 60% for `bottom`). `background` colors the
+image's side of the slide, edge to edge. Split works with still and animated
+images, not videos, and cannot be combined with `fit`, `span`, `position`, or
+`overlay`.
 
 ## Commands
 

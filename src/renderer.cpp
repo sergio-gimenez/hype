@@ -170,7 +170,8 @@ QString withReplacedMedia(const QString &source, const QString &file) {
         : current.placed()
             ? QString("position=%1 size=%2%").arg(current.position, QString::number(current.size))
         : !current.split.isEmpty()
-            ? QString("split=%1 size=%2%").arg(current.split, QString::number(current.share))
+            ? QString("split=%1 size=%2%").arg(current.split, QString::number(current.share)) +
+                  (current.background.isEmpty() ? QString() : " background=" + current.background)
             : QString();
     return withMedia(source, "![" + flags + "](<" + file + ">)");
 }
@@ -298,8 +299,11 @@ static Media readMedia(const QString &source, const QString &base) {
             result.error = "Only images can be split";
         else if (explicitPosition)
             result.error = "Choose either split or position";
-        else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty())
-            result.error = "A split image cannot use fit, span, background, or overlay";
+        else if (fit || span || !explicitOverlay.isEmpty())
+            result.error = "A split image cannot use fit, span, or overlay";
+        // Its background is a plain color for the image's side of the slide.
+        else if (!result.background.isEmpty() && !QColor(result.background).isValid())
+            result.error = "A split image's background must be a color";
         // size= is the image side's share of the slide; it is not a placement.
         result.share = result.size > 0 ? result.size : result.split == "bottom" ? 60 : 50;
         result.position.clear();
@@ -504,8 +508,12 @@ QString ensurePoster(const QString &video, const QString &base) {
     }
     return result;
 }
+static QString slideProperty(const QString &source, const QString &key);
 QStringList slideProblems(const QString &source, const QString &base) {
     QStringList errors;
+    if (const QString vertical = slideProperty(source, "vertical");
+        !vertical.isEmpty() && !QStringList{"top", "center", "bottom"}.contains(vertical))
+        errors << "Vertical alignment must be top, center, or bottom";
     auto media = parseMedia(source, base);
     if (!media.error.isEmpty())
         errors << media.error;
@@ -634,6 +642,55 @@ static QString slideProperty(const QString &source, const QString &key) {
     QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
     return re.match(source).captured(1);
 }
+bool slideHidden(const QString &source) {
+    // Most slides never mention it, so skip the pattern for them. A code sample showing the
+    // comment does not hide its slide.
+    return source.contains("hidden=") && slideProperty(outsideCode(source), "hidden") == "true";
+}
+QString withSlideProperty(QString source, const QString &key, const QString &value) {
+    static const QRegularExpression comment("<!--\\s*hype:([\\s\\S]*?)-->");
+    const QRegularExpression attribute("\\s*\\b" + key + "=\"[^\"]*\"");
+    QVector<QRegularExpressionMatch> found;
+    auto matches = comment.globalMatch(outsideCode(source));
+    while (matches.hasNext())
+        found << matches.next();
+    // Work from the last comment back, so earlier offsets stay valid. The first one takes the value.
+    for (qsizetype n = found.size() - 1; n >= 0; --n) {
+        const auto &m = found[n];
+        QString body = source.mid(m.capturedStart(1), m.capturedLength(1));
+        const bool had = body.contains(attribute);
+        body.remove(attribute);
+        body = body.trimmed();
+        if (n == 0 && !value.isEmpty())
+            body += (body.isEmpty() ? "" : " ") + key + "=\"" + value + "\"";
+        else if (!had)
+            continue;
+        int start = m.capturedStart(), end = m.capturedEnd();
+        if (body.isEmpty()) {
+            // A comment alone on its line leaves no blank line behind.
+            // A negative lastIndexOf start counts from the end, so the first line needs no search.
+            const int lineStart = start > 0 ? source.lastIndexOf('\n', start - 1) + 1 : 0;
+            int lineEnd = source.indexOf('\n', end);
+            if (lineEnd < 0)
+                lineEnd = source.size();
+            if (source.mid(lineStart, start - lineStart).trimmed().isEmpty() &&
+                source.mid(end, lineEnd - end).trimmed().isEmpty()) {
+                start = lineStart;
+                end = qMin(lineEnd + 1, int(source.size()));
+            }
+            source.remove(start, end - start);
+        } else {
+            source.replace(start, end - start, "<!-- hype: " + body + " -->");
+        }
+    }
+    if (found.isEmpty() && !value.isEmpty()) {
+        int first = 0;
+        while (first < source.size() && source[first].isSpace())
+            ++first;
+        source.insert(first, "<!-- hype: " + key + "=\"" + value + "\" -->\n");
+    }
+    return source;
+}
 static QString preserveLineBreaks(QString markdown) {
     markdown.replace("\r\n", "\n").replace('\r', '\n');
     const QStringList visible = outsideCode(markdown, false).split('\n');
@@ -706,6 +763,12 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
     font.setPixelSize(qRound(fontSize));
     font.setHintingPreference(QFont::PreferNoHinting);
     doc.setDefaultFont(font);
+    // A deck with a fixed text size sets its headings by ratio and gives body text more air.
+    const qreal fixed = palette.value("text_size").toDouble();
+    const qreal headingScale = fixed > 0 ? palette.value("heading_size").toDouble() / fixed : 1.8;
+    const QString headingFamily =
+        code ? font.family() : palette.value("heading_font", font.family()).toString();
+    const int headingWeight = palette.value("heading_weight", 700).toInt();
     doc.setDocumentMargin(0);
     QTextOption option;
     option.setUseDesignMetrics(true);
@@ -724,42 +787,58 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
         if (!cursor.currentTable())
             bf.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
         bf.setTopMargin(level ? fontSize * 0.15 : 0);
-        bf.setBottomMargin(fontSize * 0.22);
-        bf.setLineHeight(115, QTextBlockFormat::ProportionalHeight);
+        bf.setBottomMargin(fontSize * (fixed > 0 ? (level ? 0.7 : 0.6) : 0.22));
+        bf.setLineHeight(fixed > 0 ? (level ? 110 : 140) : 115, QTextBlockFormat::ProportionalHeight);
         if (code) {
             bf.setBottomMargin(0);
             bf.setTopMargin(0);
             bf.setLineHeight(120, QTextBlockFormat::ProportionalHeight);
         }
         cursor.setBlockFormat(bf);
-        for (auto it = block.begin(); !it.atEnd(); ++it) {
-            auto fragment = it.fragment();
-            if (!fragment.isValid())
-                continue;
+        // Replacing a run's format can merge it with its neighbor and invalidate fragments, so
+        // take each run's extent and format first.
+        struct Run { int start, end; QTextCharFormat format; };
+        QList<Run> runs;
+        for (auto it = block.begin(); !it.atEnd(); ++it)
+            if (const auto fragment = it.fragment(); fragment.isValid())
+                runs.append({fragment.position(), fragment.position() + fragment.length(),
+                             fragment.charFormat()});
+        for (const Run &fragment : runs) {
             QTextCursor text(&doc);
-            text.setPosition(fragment.position());
-            text.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+            text.setPosition(fragment.start);
+            text.setPosition(fragment.end, QTextCursor::KeepAnchor);
             QTextCharFormat cf;
             QFont f = font;
-            f.setPixelSize(qRound(fontSize * (level == 1 ? 1.8 : level ? 1.25 : 1.0)));
+            f.setPixelSize(qRound(fontSize * (level == 1   ? headingScale
+                                              : !level     ? 1.0
+                                              : fixed > 0 ? (headingScale + 1) / 2
+                                                           : 1.25)));
             cf.setProperty(QTextFormat::FontPixelSize, f.pixelSize());
-            cf.setFontFamilies({font.family()});
+            cf.setFontFamilies({level ? headingFamily : font.family()});
             // Qt drops both heading weight and its relative size at inline
             // formatting boundaries. The relative size overrides FontPixelSize
             // during layout, so restore both to preserve the existing heading
             // appearance, while keeping underline/italic/etc. local to each run.
             if (level) {
-                cf.setFontWeight(QFont::Bold);
+                cf.setFontWeight(headingWeight);
                 cf.setProperty(QTextFormat::FontSizeAdjustment, 4 - level);
             }
             QColor color(palette["foreground"].toString());
-            if (fragment.charFormat().fontWeight() >= QFont::Bold && !level)
+            if (fragment.format.fontWeight() >= QFont::Bold && !level)
                 color = QColor(palette["accent"].toString());
             if (block.text().startsWith(QString::fromUtf8("—"))) {
                 cf.setProperty(QTextFormat::FontPixelSize, qRound(fontSize * 0.7));
             }
             cf.setForeground(color);
-            text.mergeCharFormat(cf);
+            if (level && fixed > 0) {
+                // A relative size, even zero, overrides the pixel size; at a fixed size the
+                // heading's pixel size is exact, so the run drops it instead.
+                QTextCharFormat run = fragment.format;
+                run.merge(cf);
+                run.clearProperty(QTextFormat::FontSizeAdjustment);
+                text.setCharFormat(run);
+            } else
+                text.mergeCharFormat(cf);
         }
     }
     for (auto it = doc.rootFrame()->begin(); !it.atEnd(); ++it)
@@ -961,6 +1040,13 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             }
         }
 
+        if (!overlayOnly && !media.split.isEmpty() && QColor(media.background).isValid()) {
+            const qreal at = media.share / 100;
+            p->fillRect(media.split == "left"    ? QRectF(0, 0, 1920 * at, 1080)
+                        : media.split == "right" ? QRectF(1920 * (1 - at), 0, 1920 * at, 1080)
+                                                 : QRectF(0, 1080 * (1 - at), 1920, 1080 * at),
+                        QColor(media.background));
+        }
         if (!overlayOnly && !backgroundOnly && !image.isNull()) {
             const QRectF dest = mediaImageRect(media, image.size());
             p->save();
@@ -1007,6 +1093,14 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         p->restore();
         return;
     }
+    // Text clears a running header. At a fixed size it starts at the same height on every
+    // slide, so headings line up from one slide to the next.
+    const qreal fixed = palette.value("text_size").toDouble();
+    const QString header = palette.value("header").toString();
+    if (!header.isEmpty())
+        area.setTop(qMax(area.top(), fixed > 0 ? 150.0 : 110.0));
+    else if (fixed > 0)
+        area.setTop(qMax(area.top(), 90.0));
     if (!text.isEmpty()) {
         bool code = text.contains(
             QRegularExpression("^ {0,3}(`{3,}|~{3,})", QRegularExpression::MultilineOption));
@@ -1030,11 +1124,16 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         qreal low = 8, high = code ? 56 : quote ? 64 : list || table ? 72 : stack ? 128 : 76;
         if (media.video && !media.span)
             high = 48;
+        if (fixed > 0)
+            high = fixed;
         QTextDocument doc;
         // Layout happens in 1080p slide units, so every render size, the PDF and
         // a theme change all reuse one search. Colors never affect the fit.
         const QString fit = QString("%1 %2 %3 %4 %5 ").arg(high).arg(area.width()).arg(area.height())
-                                .arg(centered).arg(code) + palette.value("font").toString() + '\n' + text;
+                                .arg(centered).arg(code) + palette.value("font").toString() + ' ' +
+                                palette.value("heading_font").toString() + ' ' +
+                                palette.value("heading_weight").toString() + ' ' +
+                                palette.value("heading_size").toString() + '\n' + text;
         if (const qreal fitted = fittedSize(fit); fitted > 0) {
             low = fitted;
             layoutSlideText(doc, text, palette, low, area.width(), centered, code);
@@ -1058,14 +1157,43 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         if (!code && doc.idealWidth() > area.width() + 1)
             sizeSlideText(doc, palette, low, area.width(), centered, code, true);
         highlightCode(doc, palette);
-        if (low < 24 && warning)
+        if (fixed > 0 && low < fixed - 0.5 && warning)
+            *warning = QString("Text shrinks to %1px to fit, below the deck's %2px")
+                           .arg(qRound(low)).arg(qRound(fixed));
+        else if (low < 24 && fixed <= 0 && warning)
             *warning = "Text fits below 24px on a 1080p slide";
+        const QString vertical = slideProperty(source, "vertical");
+        const qreal room = qMax(0.0, area.height() - doc.size().height());
+        const bool top = vertical == "top" || (vertical.isEmpty() && fixed > 0);
+        const qreal offset = vertical == "bottom" ? room : top ? 0 : room / 2;
         p->save();
-        p->translate(area.x(), area.y() + qMax(0.0, (area.height() - doc.size().height()) / 2));
+        p->translate(area.x(), area.y() + offset);
         QAbstractTextDocumentLayout::PaintContext context;
         context.palette.setColor(QPalette::Text, QColor(palette["foreground"].toString()));
         doc.documentLayout()->draw(p, context);
         p->restore();
+    }
+    if (!header.isEmpty()) {
+        // A running header: the deck's name on the left, the slide's section and number on
+        // the right, small and spaced out in the text's color.
+        QFont small(palette.value("font", "JetBrains Mono").toString());
+        small.setPixelSize(15);
+        small.setWeight(QFont::Medium);
+        small.setCapitalization(QFont::AllUppercase);
+        small.setLetterSpacing(QFont::AbsoluteSpacing, 15 * 0.18);
+        small.setHintingPreference(QFont::PreferNoHinting);
+        QColor ink(palette["foreground"].toString());
+        ink.setAlphaF(0.6);
+        p->setFont(small);
+        p->setPen(ink);
+        const QRectF band(130, 50, 1660, 40);
+        QString place = slideProperty(source, "section");
+        if (const int number = palette.value("slide_number").toInt(); number > 0)
+            place += (place.isEmpty() ? "" : "   ") + QString("%1").arg(number, 2, 10, QChar('0'));
+        p->drawText(band, Qt::AlignRight | Qt::AlignVCenter, place);
+        const qreal used = QFontMetricsF(small).horizontalAdvance(place);
+        p->drawText(band.adjusted(0, 0, -used - 40, 0), Qt::AlignLeft | Qt::AlignVCenter,
+                    QFontMetricsF(small).elidedText(header, Qt::ElideRight, band.width() - used - 40));
     }
     if (!problems.isEmpty()) {
         p->setPen(Qt::white);
@@ -1091,7 +1219,8 @@ void SlideItem::setDeck(Deck *deck) {
 }
 void SlideItem::paint(QPainter *p) {
     if (m_deck)
-        paintSlide(p, boundingRect(), m_deck->slideSource(), m_deck->baseDir(), m_deck->palette(),
+        paintSlide(p, boundingRect(), m_deck->slideSource(), m_deck->baseDir(),
+                   m_deck->slidePalette(m_deck->selected()),
                    nullptr, m_overlayOnly);
 }
 // Qt multiplies an Image's sourceSize by the screen's scale, so a 340px thumbnail arrives as

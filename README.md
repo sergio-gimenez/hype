@@ -136,7 +136,7 @@ For videos, choose **Background → Blurred first frame**, or write `![fit backg
 
 To put a small image such as a logo in a corner, choose **Place** from the **Layout** menu and pick a position, then choose a **Size**. You can also write it in the brackets: `![position=bottom-right size=10%](logo.png)`. Positions are `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, and `bottom-right`. The size is the share of the slide the image may fill, from 1% to 100%, and defaults to 10% (Small). A placed image keeps its shape and sits just inside the slide edge. The slide's text and theme colors stay as they are, without darkening or white lettering. Placement works with still and animated images, not videos, and replaces `fit`, `span`, and background choices; choosing **Fit** or **Span** removes it. Pasting or dropping a new image onto a placed slide keeps its position and size, so swapping a logo is one step. Pasted images retain enough detail to enlarge them later.
 
-To put text beside a picture instead of over it, split the slide: `![split=left](diagram.svg)` puts the image on the left half and the text on the right, `![split=right size=40%](chart.png)` gives the image the right 40%, and `![split=bottom size=70%](grid.svg)` keeps a headline on top with the image filling the rest. The text keeps the theme's colors, without darkening or white lettering, and reads from the left in a side column. Split works with still and animated images, not videos, and cannot be combined with `fit`, `span`, `position`, `background`, or `overlay`. Replacing the image keeps its side and share.
+To put text beside a picture instead of over it, split the slide: `![split=left](diagram.svg)` puts the image on the left half and the text on the right, `![split=right size=40%](chart.png)` gives the image the right 40%, and `![split=bottom size=70%](grid.svg)` keeps a headline on top with the image filling the rest. The text keeps the theme's colors, without darkening or white lettering, and reads from the left in a side column. Add `background=#e4dfd7` to color the image's side of the slide edge to edge. Split works with still and animated images, not videos, and cannot be combined with `fit`, `span`, `position`, or `overlay`. Replacing the image keeps its side, share, and color.
 
 To draw something yourself, write SVG in an `svg` code block. It takes the place of the slide's image, stays sharp, and stays vector in PDF. Name the theme's colors as `var(--accent)`, `var(--foreground)`, and so on, and the drawing follows the theme; shapes and text without colors of their own take the theme's text color, and text takes the presentation's font:
 
@@ -162,6 +162,10 @@ The palette and font icons in the toolbar choose an installed Omarchy theme and 
 The header shows the presentation's name with your position in it, such as “Slide 4 of 45”; saving and exporting report their progress on that line. The file icon beside it holds New, Open, Save, Export, and Version history, and is highlighted when you have unsaved changes.
 
 Colors and the font choice are saved in the Markdown file. Install the same font on another computer to keep the typography consistent.
+
+Talks want big text that fills each slide; a proposal or brand book wants the same type on every page. Fix it in the front matter: `text_size: 24` sets body text to 24 pixels on a 1080p slide everywhere, headings take `heading_size` (64, say), and text starts at the top of its area so headings line up from slide to slide. Text still shrinks when a slide holds too much, and `hype check` says so. `heading_font: "Newsreader"` sets headings in a second font and `heading_weight: 400` sets their weight. `header: "Company · Proposal"` adds a small running header with the slide's section and number on the right; name a slide's section with `<!-- hype: section="Context" -->`, and move its text with `vertical="center"` or `vertical="bottom"`.
+
+Keep a backup slide without showing it: right-click it and choose Hide slide, or add `hidden="true"` to its `hype` comment. A hidden slide stays in the deck, dimmed in the sidebar, but presenting skips it and PDF and PowerPoint exports leave it out; `hype export --include-hidden` keeps it.
 
 ## Present and export
 
@@ -227,6 +231,7 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Shift+arrows / Shift+click | Extend the slide selection |
 | Ctrl+Enter | Add a slide |
 | Ctrl+D | Duplicate selected slides |
+| Ctrl+Shift+H | Hide or show selected slides |
 | Delete | Delete selected slides |
 | Ctrl+V | Paste text or add and name media |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |

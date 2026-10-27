@@ -48,7 +48,7 @@ QImage paint(const Deck &deck, int index, int width, QString *warning) {
     QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     QPainter painter(&image);
-    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.palette(), warning);
+    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.slidePalette(index), warning);
     return image;
 }
 QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int index) {
@@ -140,6 +140,7 @@ struct Command {
             parser.addPositionalArgument("presentation", "Markdown presentation", "<presentation>");
     }
     void json() { parser.addOption({"json", "Print the result as JSON"}); }
+    void includeHidden() { parser.addOption({"include-hidden", "Include slides marked hidden=\"true\""}); }
     QString argument(int index) const { return parser.positionalArguments().value(index); }
     // Commands never touch the editor's memory of the last presentation.
     bool load(Deck &deck) const {
@@ -166,17 +167,24 @@ int check(const QStringList &arguments) {
     int errors = 0;
     for (const auto &problem : problems)
         errors += problem.error;
+    int hidden = 0;
+    for (int i = 0; i < deck.count(); ++i)
+        hidden += deck.isHidden(i);
     if (command.parser.isSet("json")) {
         QJsonArray list;
         for (const auto &problem : problems)
             list << toJson(problem);
-        print({{"ok", errors == 0}, {"slides", deck.count()}, {"problems", list}});
+        print({{"ok", errors == 0}, {"slides", deck.count()}, {"hidden", hidden}, {"problems", list}});
         return errors ? 1 : 0;
     }
     for (const auto &problem : problems)
         print(problem.error ? stderr : stdout, toText(command.argument(1), problem));
     const int warnings = problems.size() - errors;
-    print(stdout, QString("%1 slides, %2 errors, %3 warnings").arg(deck.count()).arg(errors).arg(warnings));
+    print(stdout, QString("%1 slides%2, %3 errors, %4 warnings")
+                      .arg(deck.count())
+                      .arg(hidden ? QString(" (%1 hidden)").arg(hidden) : QString())
+                      .arg(errors)
+                      .arg(warnings));
     return errors ? 1 : 0;
 }
 
@@ -194,14 +202,17 @@ int slides(const QStringList &arguments) {
         const int first = firstLine(deck.source(), parsed.slides[i]);
         const int last = qMax(first, lastLine(deck.source(), parsed.slides[i]));
         const QString title = slideTitle(media.text);
+        const bool hidden = slideHidden(parsed.slides[i].source);
         list << QJsonObject{{"slide", i + 1}, {"line", first}, {"endLine", last}, {"title", title},
-                            {"media", media.file.isEmpty() ? QJsonValue() : QJsonValue(media.file)}};
+                            {"media", media.file.isEmpty() ? QJsonValue() : QJsonValue(media.file)},
+                            {"hidden", hidden}};
         if (!command.parser.isSet("json"))
-            print(stdout, QString("%1  %2  %3%4")
+            print(stdout, QString("%1  %2  %3%4%5")
                               .arg(i + 1, 3)
                               .arg(QString("%1-%2").arg(first).arg(last), -9)
                               .arg(title.isEmpty() ? "(no text)" : title,
-                                   media.file.isEmpty() ? QString() : "  [" + media.file + "]"));
+                                   media.file.isEmpty() ? QString() : "  [" + media.file + "]",
+                                   hidden ? "  (hidden)" : ""));
     }
     if (command.parser.isSet("json"))
         print({{"title", deck.title()}, {"theme", deck.themeName()}, {"font", deck.fontName()}, {"slides", list}});
@@ -214,11 +225,13 @@ int render(const QStringList &arguments) {
     command.parser.addOption({{"o", "output"}, "PNG file for one slide, or directory for all (default: "
                                                "slide-NNN.png, or slides/)", "path"});
     command.parser.addOption({"width", "Image width in pixels (default: 1920)", "pixels", "1920"});
+    command.includeHidden();
     command.json();
     command.parser.process(arguments);
     Deck deck;
     if (!command.load(deck))
         return 1;
+    deck.setIncludeHidden(command.parser.isSet("include-hidden"));
     const int width = command.parser.value("width").toInt();
     if (width < 160 || width > 7680)
         return fail("Width must be between 160 and 7680.");
@@ -229,12 +242,13 @@ int render(const QStringList &arguments) {
             output = "slides";
         if (!deck.renderImages(output, width))
             return fail(deck.status());
+        const int rendered = int(deck.exportedSlides().size());
         if (json)
             print({{"directory", QFileInfo(output).absoluteFilePath()},
                    {"manifest", QFileInfo(output + "/slides.json").absoluteFilePath()},
-                   {"slides", deck.count()}});
+                   {"slides", rendered}});
         else
-            print(stdout, QString("Rendered %1 slides to %2").arg(deck.count()).arg(output));
+            print(stdout, QString("Rendered %1 slides to %2").arg(rendered).arg(output));
         return 0;
     }
     const int number = command.parser.value("slide").toInt();
@@ -281,6 +295,7 @@ int render(const QStringList &arguments) {
 int exportDeck(const QStringList &arguments) {
     Command command("export", "Export a presentation as PDF or PowerPoint, chosen by the file extension.");
     command.parser.addPositionalArgument("output", "File ending in .pdf or .pptx", "<output>");
+    command.includeHidden();
     command.json();
     command.parser.process(arguments);
     const QString output = command.argument(2);
@@ -290,11 +305,13 @@ int exportDeck(const QStringList &arguments) {
     Deck deck;
     if (!command.load(deck))
         return 1;
+    deck.setIncludeHidden(command.parser.isSet("include-hidden"));
     QDir().mkpath(QFileInfo(output).absolutePath());
     if (!(format == "pdf" ? deck.exportPdf(output) : deck.exportPptx(output)))
         return fail(deck.status());
     if (command.parser.isSet("json"))
-        print({{"output", QFileInfo(output).absoluteFilePath()}, {"format", format}, {"slides", deck.count()}});
+        print({{"output", QFileInfo(output).absoluteFilePath()}, {"format", format},
+               {"slides", int(deck.exportedSlides().size())}});
     else
         print(stdout, deck.status());
     return 0;

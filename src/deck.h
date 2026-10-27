@@ -34,6 +34,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(int selectionLast READ selectionLast NOTIFY selectionChanged)
     Q_PROPERTY(int selectionCount READ selectionCount NOTIFY selectionChanged)
     Q_PROPERTY(QString speakerNotes READ speakerNotes NOTIFY selectionChanged)
+    Q_PROPERTY(bool selectionHidden READ selectionHidden NOTIFY selectionChanged)
     Q_PROPERTY(int count READ count NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
@@ -74,6 +75,13 @@ class Deck : public QAbstractListModel {
     QString slideSource() const;
     QString slideText() const;
     QString speakerNotes() const;
+    bool selectionHidden() const;
+    Q_INVOKABLE bool isHidden(int index) const;
+    // The slide a presentation reaches from `from` after `steps` shown slides, skipping hidden ones.
+    Q_INVOKABLE int shownSlide(int from, int steps) const;
+    // Exports leave hidden slides out unless asked to include them.
+    void setIncludeHidden(bool include) { m_includeHidden = include; }
+    QVector<int> exportedSlides() const;
     int selected() const { return m_selected; }
     int selectionFirst() const { return qMin(m_anchor, m_selected); }
     int selectionLast() const { return qMax(m_anchor, m_selected); }
@@ -95,6 +103,8 @@ class Deck : public QAbstractListModel {
     QColor foreground() const;
     QColor accent() const;
     QVariantMap palette() const;
+    // The palette plus, under a running header, where this slide sits in the deck.
+    QVariantMap slidePalette(int index) const;
     QVariantMap media() const;
     QStringList mediaPositions() const;
     QString baseDir() const;
@@ -125,6 +135,7 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void addSlide();
     Q_INVOKABLE void duplicateSlide();
     Q_INVOKABLE void deleteSlide();
+    Q_INVOKABLE void toggleHidden();
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void chooseTheme(const QString &name);
@@ -186,6 +197,7 @@ class Deck : public QAbstractListModel {
     QTimer m_reloadTimer, m_mediaTimer;
     QString m_notifiedFont;
     bool m_externalChange = false;
+    bool m_includeHidden = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;
     QTimer m_autosaveTimer, m_autosaveDeadline;
     bool m_recovering = false;

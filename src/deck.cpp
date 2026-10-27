@@ -474,6 +474,46 @@ void Deck::deleteSlide() {
         list << "\n";
     replaceSlides(list, qMin(first, int(list.size()) - 1));
 }
+void Deck::toggleHidden() {
+    if (!count())
+        return;
+    // Hide the selection, or show it again once every slide in it is hidden.
+    const QString value = selectionHidden() ? QString() : "true";
+    QStringList list;
+    for (auto &s : m_parsed.slides)
+        list << s.source;
+    for (int i = selectionFirst(); i <= selectionLast(); ++i)
+        list[i] = withSlideProperty(list[i], "hidden", value);
+    replaceSlides(list, m_selected, m_anchor);
+}
+bool Deck::isHidden(int index) const {
+    return index >= 0 && index < count() && slideHidden(slide(index));
+}
+bool Deck::selectionHidden() const {
+    if (!count())
+        return false;
+    for (int i = selectionFirst(); i <= selectionLast(); ++i)
+        if (!isHidden(i))
+            return false;
+    return true;
+}
+int Deck::shownSlide(int from, int steps) const {
+    const int direction = steps < 0 ? -1 : 1;
+    int reached = from;
+    for (int i = from + direction, left = qAbs(steps); left > 0 && i >= 0 && i < count(); i += direction)
+        if (!isHidden(i)) {
+            reached = i;
+            --left;
+        }
+    return qBound(0, reached, qMax(0, count() - 1));
+}
+QVector<int> Deck::exportedSlides() const {
+    QVector<int> slides;
+    for (int i = 0; i < count(); ++i)
+        if (m_includeHidden || !isHidden(i))
+            slides << i;
+    return slides;
+}
 void Deck::undo() {
     if (m_undo.isEmpty())
         return;
@@ -569,8 +609,39 @@ QVariantMap Deck::palette() const {
             colors[key] = v;
     }
     colors["font"] = scalar(m_parsed.header, "font", "JetBrains Mono");
+    // Typography and the running header travel with the colors, so every render sees them.
+    colors["heading_font"] = scalar(m_parsed.header, "heading_font", colors["font"].toString());
+    const int weight = scalar(m_parsed.header, "heading_weight").toInt();
+    colors["heading_weight"] = weight >= 100 && weight <= 900 ? weight : 700;
+    // A fixed text size turns off growing text to fill the slide; it still shrinks to fit.
+    const double text = scalar(m_parsed.header, "text_size").toDouble();
+    if (text >= 8 && text <= 200) {
+        colors["text_size"] = text;
+        const double heading = scalar(m_parsed.header, "heading_size").toDouble();
+        colors["heading_size"] = heading >= text && heading <= 400 ? heading : qRound(text * 2.5);
+    }
+    if (const QString header = scalar(m_parsed.header, "header"); !header.isEmpty())
+        colors["header"] = header;
     m_paletteHeader = m_parsed.header;
     m_paletteCache = colors;
+    return colors;
+}
+QVariantMap Deck::slidePalette(int index) const {
+    QVariantMap colors = palette();
+    // Only a header shows the number; without one, moving a slide keeps its cached renders.
+    // Hidden slides go unnumbered, so the numbers count only what a talk or an export shows.
+    if (colors.contains("header")) {
+        int number = 0, shown = 0;
+        for (int i = 0; i < count(); ++i) {
+            if (isHidden(i))
+                continue;
+            ++shown;
+            if (i <= index)
+                number = shown;
+        }
+        colors["slide_number"] = isHidden(index) ? 0 : number;
+        colors["slide_count"] = shown;
+    }
     return colors;
 }
 QColor Deck::background() const { return QColor(palette()["background"].toString()); }
@@ -1208,13 +1279,13 @@ QString Deck::savePastedMedia(const QString &value) {
 QString Deck::renderId(int index) const {
     auto &cached = m_renderIds[index];
     const QString source = slide(index), base = baseDir();
-    const auto colors = palette();
+    const auto colors = slidePalette(index);
     if (cached.source == source && cached.base == base && cached.palette == colors &&
         cached.clock.isValid() && cached.clock.elapsed() < 1000)
         return cached.id;
     QByteArray bytes;
     QDataStream stream(&bytes, QIODevice::WriteOnly);
-    stream << slide(index) << baseDir() << palette();
+    stream << slide(index) << baseDir() << colors;
     auto media = parseMedia(slide(index), baseDir());
     for (const QString &path : {media.path, media.poster}) {
         QFileInfo file(path);
@@ -1426,7 +1497,12 @@ void Deck::startExport(const QString &format, const QString &path) {
 bool Deck::exportPdf(const QString &path) {
     if (!validateStructure("export"))
         return false;
-    for (int i = 0; i < count(); ++i) {
+    const auto shown = exportedSlides();
+    if (shown.isEmpty()) {
+        setStatus("Every slide is hidden; nothing to export");
+        return false;
+    }
+    for (int i : shown) {
         auto errors = slideProblems(slide(i), baseDir());
         if (!errors.isEmpty()) {
             setStatus(QString("Slide %1: %2").arg(i + 1).arg(errors.join("; ")));
@@ -1451,14 +1527,16 @@ bool Deck::exportPdf(const QString &path) {
             setStatus("Could not initialize PDF painter");
             return false;
         }
-        for (int i = 0; i < count(); ++i) {
-            emit exportAdvanced(double(i) / count(), QString("Exporting slide %1 of %2").arg(i + 1).arg(count()));
-            if (i && !writer.newPage()) {
+        for (int n = 0; n < shown.size(); ++n) {
+            const int i = shown[n];
+            emit exportAdvanced(double(n) / shown.size(),
+                                QString("Exporting slide %1 of %2").arg(n + 1).arg(shown.size()));
+            if (n && !writer.newPage()) {
                 setStatus("Could not create PDF page");
                 return false;
             }
             paintSlide(&painter, QRectF(0, 0, writer.width(), writer.height()), slide(i), baseDir(),
-                       palette());
+                       slidePalette(i));
         }
         painter.end();
     }
@@ -1483,7 +1561,12 @@ static bool opaque(const QImage &image) {
 bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     if (!validateStructure("export"))
         return false;
-    for (int i = 0; i < count(); ++i) {
+    const auto shown = exportedSlides();
+    if (shown.isEmpty()) {
+        setStatus("Every slide is hidden; nothing to export");
+        return false;
+    }
+    for (int i : shown) {
         auto errors = slideProblems(slide(i), baseDir());
         if (!errors.isEmpty()) {
             setStatus(QString("Slide %1: %2").arg(i + 1).arg(errors.join("; ")));
@@ -1500,8 +1583,8 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     // media while the slides render; on a small machine, render first and convert after,
     // so the two peaks never add up.
     bool converts = false;
-    for (int i = 0; powerPoint && !converts && i < count(); ++i)
-        converts = !parseMedia(slide(i), baseDir()).path.isEmpty();
+    for (int n = 0; powerPoint && !converts && n < shown.size(); ++n)
+        converts = !parseMedia(slide(shown[n]), baseDir()).path.isEmpty();
     const bool overlap = !converts || budget::availableBytes() < 0 || budget::availableBytes() > (6LL << 30);
     stills.setMaxThreadCount(budget::workers(200LL << 20, 16, overlap ? 0.4 : 0.6));
     std::atomic_bool stopped = false;
@@ -1511,8 +1594,8 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     });
     struct Still { QString name, warning; bool saved = false; };
     QList<QFuture<Still>> rendered;
-    for (int i = 0; i < count(); ++i)
-        rendered << QtConcurrent::run(&stills, [&stopped, source = slide(i), base = baseDir(), colors = palette(),
+    for (int i : shown)
+        rendered << QtConcurrent::run(&stills, [&stopped, source = slide(i), base = baseDir(), colors = slidePalette(i),
                                                 width, directory, powerPoint, i]() -> Still {
             if (stopped)
                 return {};
@@ -1538,21 +1621,22 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
         const double portion = 0.8;
         while (!stills.waitForDone(100)) {
             const auto done = std::count_if(rendered.cbegin(), rendered.cend(), [](const auto &f) { return f.isFinished(); });
-            emit exportAdvanced(portion * done / count(), QString("Exporting slide %1 of %2").arg(qMin<qsizetype>(count(), done + 1)).arg(count()));
+            emit exportAdvanced(portion * done / shown.size(), QString("Exporting slide %1 of %2").arg(qMin<qsizetype>(shown.size(), done + 1)).arg(shown.size()));
         }
         // Return the workers' freed canvases to the system before the encoder starts.
         malloc_trim(0);
     }
     QJsonArray slides;
     QHash<QString, QString> convertedVideos;
-    for (int i = 0; i < count(); ++i) {
+    for (int n = 0; n < shown.size(); ++n) {
+        const int i = shown[n];
         const double portion = powerPoint ? 0.8 : 1.0;
-        auto progress = [this, i, portion](double fraction, const QString &stage) {
-            emit exportAdvanced(portion * (i + fraction) / count(),
-                QString("%1 slide %2 of %3").arg(stage).arg(i + 1).arg(count()));
+        auto progress = [this, n, total = shown.size(), portion](double fraction, const QString &stage) {
+            emit exportAdvanced(portion * (n + fraction) / total,
+                QString("%1 slide %2 of %3").arg(stage).arg(n + 1).arg(total));
         };
         progress(0, "Exporting");
-        const Still still = rendered[i].result();
+        const Still still = rendered[n].result();
         const QString name = still.name, warning = still.warning;
         if (!still.saved) {
             setStatus("Could not save rendered slide");
@@ -1591,7 +1675,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
                 int repeats = 1;
                 QString error;
                 progress(0, "Converting animation");
-                if (!exportAnimation(slide(i), baseDir(), palette(), directory + "/" + movie, width,
+                if (!exportAnimation(slide(i), baseDir(), slidePalette(i), directory + "/" + movie, width,
                                      &repeats, &error,
                                      [&](double fraction) { progress(fraction, "Converting animation"); })) {
                     setStatus(QString("Slide %1: %2").arg(i + 1).arg(error));
@@ -1611,7 +1695,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
             QImage overlay(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
             overlay.fill(Qt::transparent);
             QPainter op(&overlay);
-            paintSlide(&op, overlay.rect(), slide(i), baseDir(), palette(), nullptr, true);
+            paintSlide(&op, overlay.rect(), slide(i), baseDir(), slidePalette(i), nullptr, true);
             op.end();
             QString name = QString("overlay-%1.png").arg(i + 1);
             if (!overlay.save(directory + "/" + name)) {

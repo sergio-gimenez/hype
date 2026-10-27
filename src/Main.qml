@@ -159,8 +159,12 @@ ApplicationWindow {
         return { audience: audience, notes: notes }
     }
     function presentFromBeginning() {
-        deck.select(0)
+        deck.select(deck.shownSlide(-1, 1))
         if (!presenting) togglePresent()
+    }
+    // Moving through a presentation skips hidden slides; editing visits every slide.
+    function step(delta) {
+        deck.select(presenting ? deck.shownSlide(deck.selected, delta) : deck.selected + delta)
     }
     function toggleVideo() {
         if (player.playbackState === MediaPlayer.PlayingState) player.pause()
@@ -501,16 +505,19 @@ ApplicationWindow {
                             anchors.centerIn: parent
                             width: Math.min(parent.width, parent.height * 16 / 9)
                             height: width * 9 / 16
+                            id: nextFrame
                             color: deck.background; border.color: win.ui.border
+                            // The next slide the talk will show, past any hidden ones.
+                            readonly property int next: (deck.revision, deck.shownSlide(deck.selected, 1))
                             Image {
                                 anchors.fill: parent
-                                source: deck.selected + 1 < deck.count
-                                    ? "image://slides/" + (deck.revision, deck.renderId(deck.selected + 1)) : ""
+                                source: nextFrame.next > deck.selected
+                                    ? "image://slides/" + (deck.revision, deck.renderId(nextFrame.next)) : ""
                                 asynchronous: true; retainWhileLoading: true; cache: true
                                 sourceSize: Qt.size(640, 360)
                             }
                             Label {
-                                anchors.centerIn: parent; visible: deck.selected + 1 >= deck.count
+                                anchors.centerIn: parent; visible: nextFrame.next <= deck.selected
                                 text: "End of presentation"; color: win.ui.muted; font.pixelSize: 16
                             }
                         }
@@ -699,26 +706,27 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.undo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.redo() }
     Shortcut { sequence: "Ctrl+D"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.duplicateSlide() }
+    Shortcut { sequence: "Ctrl+Shift+H"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting; onActivated: deck.toggleHidden() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+Return"; onActivated: { win.addSlide() } }
     Shortcut { sequence: "Delete"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.deleteSlide() }
-    Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 1) }
+    Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(1) }
     Shortcut { sequence: "Shift+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + 1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Down"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? 1 : win.rowStep)) }
+    Shortcut { sequence: "Down"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(win.presenting ? 1 : win.rowStep) }
     Shortcut { sequence: "Ctrl+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(win.rowStep) }
     Shortcut { sequence: "Shift+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Left"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + -1) }
+    Shortcut { sequence: "Left"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(-1) }
     Shortcut { sequence: "Ctrl+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-1) }
     Shortcut { sequence: "Shift+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? -1 : -win.rowStep)) }
+    Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(win.presenting ? -1 : -win.rowStep) }
     Shortcut { sequence: "Ctrl+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-win.rowStep) }
     Shortcut { sequence: "Shift+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
-    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
+    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(5 * win.rowStep) }
+    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(-5 * win.rowStep) }
     Shortcut { sequence: "Ctrl+PgDown"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(5) }
     Shortcut { sequence: "Ctrl+PgUp"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-5) }
-    Shortcut { sequence: "Home"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
-    Shortcut { sequence: "End"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(deck.count - 1) }
+    Shortcut { sequence: "Home"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(win.presenting ? deck.shownSlide(-1, 1) : 0) }
+    Shortcut { sequence: "End"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(win.presenting ? deck.shownSlide(deck.count, -1) : deck.count - 1) }
     Shortcut { sequence: "Ctrl+Home"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-deck.count) }
     Shortcut { sequence: "Ctrl+End"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(deck.count) }
     Shortcut { sequence: "Space"; context: Qt.ApplicationShortcut; enabled: !win.popupOpen && !deck.compressingImage && win.presenting && (deck.media.video || animation.active); autoRepeat: false; onActivated: { if (animation.item) animation.item.paused = !animation.item.paused; else win.toggleVideo() } }
@@ -786,6 +794,7 @@ ApplicationWindow {
         property bool selectionActive: true
         property size renderSize: Qt.size(340, 192)
         readonly property bool current: deck.selected === slide
+        readonly property bool hidden: (deck.revision, deck.isHidden(slide))
         readonly property color selectionStroke: selected ? (selectionActive ? win.ui.accent : win.ui.inactiveSelection) : win.ui.border
         readonly property int selectionStrokeWidth: current && selectionActive ? 3 : selected ? 2 : 1
         color: deck.background; radius: win.rounding
@@ -794,6 +803,14 @@ ApplicationWindow {
             source: "image://slides/" + (deck.revision, deck.renderId(frame.slide))
             asynchronous: true; retainWhileLoading: true; cache: true
             sourceSize: frame.renderSize; fillMode: Image.PreserveAspectCrop; clip: true
+            opacity: frame.hidden ? 0.35 : 1
+        }
+        Rectangle {
+            objectName: "hiddenTag"; visible: frame.hidden
+            anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 6
+            width: hiddenLabel.implicitWidth + 12; height: hiddenLabel.implicitHeight + 6
+            radius: win.softRadius; color: win.ui.border
+            Label { id: hiddenLabel; anchors.centerIn: parent; text: "Hidden"; font.pixelSize: 10; color: win.ui.foreground }
         }
         // A ring's inner radius is its radius minus its width, so this one sits outside
         // the frame and lands exactly on the frame's own corners.
@@ -1132,7 +1149,7 @@ ApplicationWindow {
                 ["Home / End", "First or last slide when focused in Slides list"], ["Shift+Arrows", "Extend the selection"],
                 ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Page Up / Page Down", "Move selected slides five places"],
                 ["Ctrl+Home / End", "Move selected slides to first or last"], ["Ctrl+Enter", "Add a slide"],
-                ["Ctrl+D", "Duplicate"], ["Delete", "Delete"] ] },
+                ["Ctrl+D", "Duplicate"], ["Ctrl+Shift+H", "Hide or show"], ["Delete", "Delete"] ] },
             { title: "Editing", keys: [
                 ["Ctrl+B", "Bold"], ["Ctrl+I", "Italic"], ["Ctrl+U", "Underline"], ["Ctrl+H", "Headline"], ["Ctrl+K", "Code block"],
                 ["Ctrl+Up / Down", "Previous or next slide"], ["Ctrl+Page Up / Page Down", "Jump five slides"],
@@ -1172,6 +1189,7 @@ ApplicationWindow {
     AppMenu { id: slideMenu
         AppMenuItem { text: "New slide after this"; hint: "Ctrl+Enter"; onTriggered: { win.addSlide() } }
         AppMenuItem { text: deck.selectionCount > 1 ? "Duplicate slides" : "Duplicate slide"; hint: "Ctrl+D"; onTriggered: deck.duplicateSlide() }
+        AppMenuItem { objectName: "hideSlideItem"; text: (deck.selectionHidden ? "Show " : "Hide ") + (deck.selectionCount > 1 ? "slides" : "slide"); hint: "Ctrl+Shift+H"; onTriggered: deck.toggleHidden() }
         AppMenuSeparator {}
         AppMenuItem { text: deck.selectionCount > 1 ? "Delete slides" : "Delete slide"; hint: "Del"; destructive: true; onTriggered: deck.deleteSlide() }
     }
@@ -1551,7 +1569,7 @@ ApplicationWindow {
                     MouseArea {
                         anchors.fill: parent
                         enabled: win.presenting
-                        onClicked: deck.select(deck.selected + 1)
+                        onClicked: win.step(1)
                     }
                 }
                 DropArea { anchors.fill: parent; onDropped: function(drop) { if (drop.hasUrls) for (let i = 0; i < drop.urls.length; ++i) { if (!deck.importMedia(drop.urls[i], i > 0)) break } } }
