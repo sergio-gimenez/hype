@@ -5,6 +5,7 @@
 #include "renderer.h"
 #include "images.h"
 #include "math.h"
+#include "mermaid.h"
 #include "syntax.h"
 #include <QApplication>
 #include <QAbstractTextDocumentLayout>
@@ -33,6 +34,7 @@
 #include <QQuickWindow>
 #include <QQuickItemGrabResult>
 #include <QSettings>
+#include <QSvgRenderer>
 #include <QStandardPaths>
 #include <QScreen>
 #include <QSaveFile>
@@ -1318,6 +1320,51 @@ static void write(const QString &path, const QString &content) {
         d.editSlide("# Changed");
         QCOMPARE(d.count(), 2);
         QCOMPARE(d.slide(1), QString("# Two\n"));
+    }
+    void svgKeepsItsWeightInPdf() {
+        // A white bar two units wide in a ten-unit drawing, as a path the way glyphs are drawn:
+        // filled, never stroked.
+        Deck d;
+        d.editSource("```svg\n<svg viewBox=\"0 0 10 10\"><path d=\"M4 0H6V10H4Z\" fill=\"#ffffff\"/></svg>\n```\n");
+        QTemporaryDir tmp;
+        QVERIFY(d.exportPdf(tmp.filePath("bar.pdf")));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.filePath("bar.pdf")), QPdfDocument::Error::None);
+        const QImage page = pdf.render(0, QSize(1920, 1080));
+        // The drawing fills a 980-pixel square, so the bar is 196 pixels wide; QtSvg's invisible
+        // pen, stroked by the PDF engine, would add a unit to it.
+        int width = 0;
+        for (int x = 0; x < page.width(); ++x)
+            width += qGray(page.pixel(x, 540)) > 200;
+        QVERIFY2(qAbs(width - 196) <= 6, qPrintable(QString::number(width)));
+    }
+    void mermaidFencesAreDrawn() {
+        const QString flow = "flowchart LR\n  a --> b\n";
+        // A mermaid fence is the slide's drawing, as an svg fence is.
+        const auto media = parseMedia("# Flow\n\n```mermaid\n" + flow + "```\n", "/tmp");
+        QCOMPARE(media.mermaid, flow);
+        QVERIFY(!media.text.contains("flowchart"));
+        QCOMPARE(media.svgBlocks, 1);
+        if (QStandardPaths::findExecutable("mmdc").isEmpty() || QStandardPaths::findExecutable("pdftocairo").isEmpty())
+            QSKIP("Needs mmdc and pdftocairo");
+        QTemporaryDir cache;
+        qputenv("XDG_CACHE_HOME", cache.path().toUtf8());
+        const auto restore = qScopeGuard([] { qunsetenv("XDG_CACHE_HOME"); });
+        const QVariantMap deck{{"background", "#ffffff"}, {"foreground", "#1a1a1a"}, {"accent", "#ff5f00"}, {"font", "sans"}};
+        const Diagram drawn = mermaidDiagram(flow, deck);
+        QVERIFY2(drawn.error.isEmpty(), qPrintable(drawn.error));
+        QVERIFY(QSvgRenderer(drawn.svg).isValid());
+        QCOMPARE(QDir(cache.filePath("hype/mermaid")).entryList({"*.svg"}).size(), 1);
+        QCOMPARE(mermaidDiagram(flow, deck).svg, drawn.svg);
+        // Mermaid's own theme draws it differently from the deck's colors.
+        auto github = deck;
+        github["mermaid_theme"] = "default";
+        QVERIFY(mermaidDiagram(flow, github).svg != drawn.svg);
+        // A broken diagram is the slide's error, in Mermaid's words and without its stack trace.
+        const QString problem = slideProblems("```mermaid\nflowchart LR\n  a -->|oops b\n```\n", "/tmp", deck).join(' ');
+        QVERIFY2(problem.contains("Parse error") && !problem.contains(".js:"), qPrintable(problem));
+        // With an image beside it, the slide holds two pictures.
+        QVERIFY(slideProblems("![](a.png)\n\n```mermaid\n" + flow + "```\n", "/tmp", deck).join(' ').contains("one media item"));
     }
     void mathFollowsPandocDollars() {
         const auto spans = [](const QString &markdown) {

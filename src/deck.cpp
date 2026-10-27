@@ -4,6 +4,7 @@
 #include "filedialog.h"
 #include "images.h"
 #include "math.h"
+#include "mermaid.h"
 #include "pptx.h"
 #include "renderer.h"
 #include <QGuiApplication>
@@ -731,6 +732,10 @@ QVariantMap Deck::palette() const {
     // Math follows beamer, in sans-serif unless the deck asks for its serif font theme.
     if (scalar(m_parsed.header, "math_font") == "serif")
         colors["math_font"] = "serif";
+    // Mermaid diagrams take the deck's colors unless the deck names a Mermaid theme.
+    if (const QString theme = scalar(m_parsed.header, "mermaid_theme");
+        QStringList{"default", "neutral", "dark", "forest"}.contains(theme))
+        colors["mermaid_theme"] = theme;
     m_paletteHeader = m_parsed.header;
     m_paletteCache = colors;
     return colors;
@@ -918,14 +923,25 @@ bool Deck::loadPath(const QString &path, bool remember) {
         checkpoint();
     return true;
 }
-// Typesets every formula in the deck in one LaTeX run, before each slide asks for its own.
+// Typesets every formula in the deck in one LaTeX run, and draws its Mermaid diagrams, before
+// each slide asks for its own.
 void Deck::prefetchMath() const {
     QVector<MathSpan> math;
-    for (const auto &slide : m_parsed.slides)
-        withoutMath(parseMedia(slide.source, baseDir()).text, &math);
+    QList<QPair<QString, QVariantMap>> diagrams;
+    for (int i = 0; i < count(); ++i) {
+        const auto media = parseMedia(slide(i), baseDir());
+        withoutMath(media.text, &math);
+        if (!media.mermaid.isEmpty())
+            diagrams.append({media.mermaid, slidePalette(i)});
+    }
     if (!math.isEmpty())
         QThreadPool::globalInstance()->start(
             [math, serif = palette().value("math_font").toString() == "serif"] { prepareFormulas(math, serif); });
+    if (!diagrams.isEmpty())
+        QThreadPool::globalInstance()->start([diagrams] {
+            for (const auto &[source, palette] : diagrams)
+                mermaidDiagram(source, palette);
+        });
 }
 bool Deck::validateStructure(const QString &operation) {
     const auto parsed = parseDeck(m_source);
@@ -1121,8 +1137,8 @@ bool Deck::saveCopyPath(const QString &path) {
     // Media outside images/ and videos/ is not copied, so refuse a copy that
     // would lose a reference the original resolves.
     for (int i = 0; i < count(); ++i) {
-        const QStringList before = slideProblems(slide(i), baseDir());
-        for (const QString &problem : slideProblems(slide(i), destination.absolutePath())) {
+        const QStringList before = slideProblems(slide(i), baseDir(), slidePalette(i));
+        for (const QString &problem : slideProblems(slide(i), destination.absolutePath(), slidePalette(i))) {
             if (!before.contains(problem)) {
                 rollback();
                 setStatus(QString("Save As could not copy media for slide %1: %2")
@@ -1626,7 +1642,7 @@ bool Deck::exportPdf(const QString &path) {
         return false;
     }
     for (int i : shown) {
-        auto errors = slideProblems(slide(i), baseDir());
+        auto errors = slideProblems(slide(i), baseDir(), slidePalette(i));
         if (!errors.isEmpty()) {
             setStatus(QString("Slide %1: %2").arg(i + 1).arg(errors.join("; ")));
             return false;
@@ -1697,7 +1713,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
         return false;
     }
     for (int i : shown) {
-        auto errors = slideProblems(slide(i), baseDir());
+        auto errors = slideProblems(slide(i), baseDir(), slidePalette(i));
         if (!errors.isEmpty()) {
             setStatus(QString("Slide %1: %2").arg(i + 1).arg(errors.join("; ")));
             return false;

@@ -2,6 +2,7 @@
 #include "budget.h"
 #include "images.h"
 #include "math.h"
+#include "mermaid.h"
 #include "syntax.h"
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
@@ -13,6 +14,7 @@
 #include <QFileInfo>
 #include <QImageReader>
 #include <QMutex>
+#include <QPaintEngine>
 #include <QPainter>
 #include <QPointer>
 #include <QProcess>
@@ -448,6 +450,9 @@ Media parseMedia(const QString &source, const QString &base) {
     if (result.svgBlocks) {
         QString remaining = result.text, extra;
         result.svgBlocks += takeFence(remaining, "svg", &extra);
+    } else if (takeFence(result.text, "mermaid", &result.mermaid)) {
+        QString remaining = result.text, extra;
+        result.svgBlocks = 1 + takeFence(remaining, "mermaid", &extra);
     }
     cache.insert(key, new Media(result), qMax(1, int((key.size() + result.text.size()) * 2)));
     return result;
@@ -525,7 +530,7 @@ SlideSteps slideSteps(const QString &source, const Media &media, bool incrementa
     // The picture is drawn apart from the text, on the step where its reference sits.
     if (!media.file.isEmpty() || media.svgBlocks) {
         const SlideSteps whole = splitSteps(withoutComments(source), incremental);
-        static const QRegularExpression svgFence("^ {0,3}(?:`{3,}|~{3,})\\s*svg\\b",
+        static const QRegularExpression svgFence("^ {0,3}(?:`{3,}|~{3,})\\s*(?:svg|mermaid)\\b",
                                                  QRegularExpression::MultilineOption);
         const int at = !media.file.isEmpty() ? int(mediaRe.match(outsideCode(whole.text)).capturedStart())
                                              : int(svgFence.match(whole.text).capturedStart());
@@ -605,7 +610,7 @@ QString ensurePoster(const QString &video, const QString &base) {
     return result;
 }
 static QString slideProperty(const QString &source, const QString &key);
-QStringList slideProblems(const QString &source, const QString &base) {
+QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette) {
     QStringList errors;
     if (const QString vertical = slideProperty(source, "vertical");
         !vertical.isEmpty() && !QStringList{"top", "center", "bottom"}.contains(vertical))
@@ -613,10 +618,13 @@ QStringList slideProblems(const QString &source, const QString &base) {
     auto media = parseMedia(source, base);
     if (!media.error.isEmpty())
         errors << media.error;
-    if (media.svgBlocks) {
+    if (media.svgBlocks && media.mermaid.isEmpty()) {
         if (const QString problem = svgProblem(media.svg); !problem.isEmpty())
             errors << problem;
     }
+    if (!media.mermaid.isEmpty())
+        if (const QString problem = mermaidDiagram(media.mermaid, palette).error; !problem.isEmpty())
+            errors << problem;
     if (!media.file.isEmpty() && !QFileInfo::exists(media.path))
         errors << "Missing media: " + media.file;
     if (!media.file.isEmpty() && !media.video && QFileInfo::exists(media.path) &&
@@ -1148,6 +1156,117 @@ QString withSvgLabel(const QString &svg, const SvgLabel &label, const QString &t
     escaped.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     return svg.left(label.start) + escaped + svg.mid(label.end);
 }
+namespace {
+// QtSvg marks "no stroke" with a pen that has nothing to paint, and Qt's PDF engine strokes
+// such a pen anyway, one SVG unit wide, in the fill's color: every filled shape grows a rim,
+// and small glyphs turn bold. This engine passes QtSvg's drawing on to the real painter with
+// those pens dropped.
+class SvgPassThrough : public QPaintEngine, public QPaintDevice {
+  public:
+    explicit SvgPassThrough(QPainter *target)
+        : QPaintEngine(AllFeatures), m_target(target), m_base(target->worldTransform()),
+          m_opacity(target->opacity()), m_clipped(target->hasClipping()),
+          m_clip(m_clipped ? target->clipPath() : QPainterPath()) {}
+    QPaintEngine *paintEngine() const override { return const_cast<SvgPassThrough *>(this); }
+    bool begin(QPaintDevice *) override { return true; }
+    bool end() override { return true; }
+    Type type() const override { return User; }
+    void updateState(const QPaintEngineState &state) override {
+        const auto dirty = state.state();
+        if (dirty & DirtyTransform)
+            m_target->setWorldTransform(state.transform() * m_base);
+        if (dirty & DirtyPen) {
+            const QPen pen = state.pen();
+            m_target->setPen(pen.brush().style() == Qt::NoBrush ? QPen(Qt::NoPen) : pen);
+        }
+        if (dirty & DirtyBrush)
+            m_target->setBrush(state.brush());
+        if (dirty & DirtyBrushOrigin)
+            m_target->setBrushOrigin(state.brushOrigin());
+        if (dirty & DirtyOpacity)
+            m_target->setOpacity(m_opacity * state.opacity());
+        if (dirty & DirtyHints)
+            m_target->setRenderHints(state.renderHints());
+        if (dirty & DirtyCompositionMode)
+            m_target->setCompositionMode(state.compositionMode());
+        if (dirty & DirtyFont)
+            m_target->setFont(state.font());
+        if (dirty & (DirtyClipPath | DirtyClipRegion | DirtyClipEnabled))
+            clip(state);
+    }
+    void drawPath(const QPainterPath &path) override { m_target->drawPath(path); }
+    void drawPolygon(const QPointF *points, int count, PolygonDrawMode mode) override {
+        if (mode == PolylineMode)
+            m_target->drawPolyline(points, count);
+        else
+            m_target->drawPolygon(points, count, mode == WindingMode ? Qt::WindingFill : Qt::OddEvenFill);
+    }
+    void drawPixmap(const QRectF &rect, const QPixmap &pixmap, const QRectF &source) override {
+        m_target->drawPixmap(rect, pixmap, source);
+    }
+    void drawImage(const QRectF &rect, const QImage &image, const QRectF &source,
+                   Qt::ImageConversionFlags flags) override {
+        m_target->drawImage(rect, image, source, flags);
+    }
+    void drawTextItem(const QPointF &point, const QTextItem &item) override { m_target->drawTextItem(point, item); }
+
+  protected:
+    int metric(PaintDeviceMetric metric) const override {
+        const QPaintDevice *device = m_target->device();
+        switch (metric) {
+        case PdmWidth: return device->width();
+        case PdmHeight: return device->height();
+        case PdmWidthMM: return device->widthMM();
+        case PdmHeightMM: return device->heightMM();
+        case PdmNumColors: return device->colorCount();
+        case PdmDepth: return device->depth();
+        case PdmDpiX: return device->logicalDpiX();
+        case PdmDpiY: return device->logicalDpiY();
+        case PdmPhysicalDpiX: return device->physicalDpiX();
+        case PdmPhysicalDpiY: return device->physicalDpiY();
+        case PdmDevicePixelRatio: return int(device->devicePixelRatio());
+        case PdmDevicePixelRatioScaled: return int(device->devicePixelRatioF() * devicePixelRatioFScale());
+        default: return 0;
+        }
+    }
+
+  private:
+    // A drawing's clip narrows the clip the slide already set; it never widens it.
+    void clip(const QPaintEngineState &state) {
+        const QTransform current = m_target->worldTransform();
+        m_target->setWorldTransform(m_base);
+        if (m_clipped)
+            m_target->setClipPath(m_clip);
+        else
+            m_target->setClipping(false);
+        m_target->setWorldTransform(current);
+        if (!state.isClipEnabled() || state.clipOperation() == Qt::NoClip)
+            return;
+        QPainterPath path = state.clipPath();
+        if (path.isEmpty() && !state.clipRegion().isEmpty())
+            path.addRegion(state.clipRegion());
+        m_target->setClipPath(path, m_clipped ? Qt::IntersectClip : Qt::ReplaceClip);
+    }
+    QPainter *m_target;
+    QTransform m_base;
+    qreal m_opacity;
+    bool m_clipped;
+    QPainterPath m_clip;
+};
+} // namespace
+void renderSvg(QSvgRenderer &svg, QPainter *p, const QRectF &bounds) {
+    if (!p->paintEngine() || p->paintEngine()->type() != QPaintEngine::Pdf) {
+        svg.render(p, bounds);
+        return;
+    }
+    p->save();
+    {
+        SvgPassThrough device(p);
+        QPainter through(&device);
+        svg.render(&through, bounds);
+    }
+    p->restore();
+}
 void paintSlide(QPainter *p, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &inputPalette, QString *warning, bool overlayOnly,
                 bool backgroundOnly) {
@@ -1170,20 +1289,24 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     const int step = palette.value("step", -1).toInt();
     const bool showMedia = step < 0 || step >= steps.media;
     const QString text = steps.text;
-    auto problems = slideProblems(source, base);
+    auto problems = slideProblems(source, base, inputPalette);
     QRectF area(130, 90, 1660, 900);
-    if (!media.svg.isEmpty() && media.file.isEmpty()) {
+    // An svg fence in the theme's colors, or a Mermaid diagram as Mermaid drew it.
+    const QByteArray drawing = !media.svg.isEmpty() ? themedSvg(media.svg, palette)
+                               : !media.mermaid.isEmpty() ? mermaidDiagram(media.mermaid, inputPalette).svg
+                                                          : QByteArray();
+    if (!drawing.isEmpty() && media.file.isEmpty()) {
         // Like a video, a drawing under a headline leaves the headline a band at the top.
         const QRectF rect =
             text.isEmpty() ? QRectF(70, 50, 1780, 980) : QRectF(100, 280, 1720, 730);
         if (!text.isEmpty())
             area = QRectF(130, 40, 1660, 205);
-        QSvgRenderer svg(themedSvg(media.svg, palette));
+        QSvgRenderer svg(drawing);
         if (!overlayOnly && !backgroundOnly && showMedia && svg.isValid() && !svg.viewBoxF().isEmpty()) {
             QSizeF size = svg.viewBoxF().size();
             size.scale(rect.size(), Qt::KeepAspectRatio);
             svg.setAspectRatioMode(Qt::KeepAspectRatio);
-            svg.render(p, QRectF(rect.center() - QPointF(size.width(), size.height()) / 2, size));
+            renderSvg(svg, p, QRectF(rect.center() - QPointF(size.width(), size.height()) / 2, size));
         }
     }
     if (!media.file.isEmpty()) {
@@ -1264,7 +1387,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             QSvgRenderer svg;
             if (vector && svg.load(path)) {
                 svg.setAspectRatioMode(Qt::KeepAspectRatio);
-                svg.render(p, dest);
+                renderSvg(svg, p, dest);
             } else
                 p->drawImage(dest, !media.video && !media.beside() && !text.isEmpty()
                                        ? softenedImage(image, dest.size())
