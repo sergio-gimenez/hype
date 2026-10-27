@@ -1,6 +1,7 @@
 #include "renderer.h"
 #include "budget.h"
 #include "images.h"
+#include "math.h"
 #include "syntax.h"
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
@@ -49,7 +50,7 @@ class ImageCache {
     }
 };
 }
-static QString outsideCode(QString source, bool maskInline = true) {
+QString outsideCode(QString source, bool maskInline) {
     int position = 0, fenceLength = 0;
     QChar fence;
     static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
@@ -623,6 +624,7 @@ QStringList slideProblems(const QString &source, const QString &base) {
         errors << "Cannot decode image: " + media.file;
     if (!media.poster.isEmpty() && !QFileInfo::exists(media.poster))
         errors << "Missing poster";
+    errors << mathProblems(media.text);
     auto matches = mediaRe.globalMatch(outsideCode(withoutComments(source)));
     int count = 0;
     while (matches.hasNext()) {
@@ -878,8 +880,11 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
         QTextCursor cursor(block);
         QTextBlockFormat bf = block.blockFormat();
         int level = bf.headingLevel();
-        // Table cells keep the alignment their column's delimiter asked for.
-        if (!cursor.currentTable())
+        // Table cells keep the alignment their column's delimiter asked for, and displayed
+        // math the middle of its line.
+        if (bf.boolProperty(MathBlockProperty))
+            bf.setAlignment(Qt::AlignHCenter);
+        else if (!cursor.currentTable())
             bf.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
         bf.setTopMargin(level ? fontSize * 0.15 : 0);
         bf.setBottomMargin(fontSize * (fixed > 0 ? (level ? 0.7 : 0.6) : 0.22));
@@ -978,7 +983,10 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
 void layoutSlideText(QTextDocument &doc, const QString &markdown, const QVariantMap &palette,
                      qreal fontSize, qreal width, bool centered, bool code) {
     doc.setUndoRedoEnabled(false);
-    doc.setMarkdown(preserveLineBreaks(padTableCells(markdown)), QTextDocument::MarkdownDialectGitHub);
+    QVector<MathSpan> math;
+    const QString text = withoutMath(markdown, &math);
+    doc.setMarkdown(preserveLineBreaks(padTableCells(text)), QTextDocument::MarkdownDialectGitHub);
+    insertMath(doc, math, palette.value("math_font").toString() == "serif");
     sizeSlideText(doc, palette, fontSize, width, centered, code);
 }
 static QMutex fitMutex;

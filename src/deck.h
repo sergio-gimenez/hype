@@ -236,4 +236,5 @@ class Deck : public QAbstractListModel {
     void watchMedia();
     void notifyChanged();
     void reloadExternal(const QString &disk);
+    void prefetchMath() const;
 };

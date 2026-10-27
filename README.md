@@ -169,6 +169,8 @@ Keep a backup slide without showing it: right-click it and choose Hide slide, or
 
 Build a slide up point by point, written as pandoc writes beamer slides. A line holding only `. . .` pauses: what follows appears on the next click. `incremental: true` in the front matter reveals every list an item at a time, and `::: incremental` or `::: nonincremental` around a list turns that on or off for it alone. A picture after a pause appears on its own step. Each step is laid out as the finished slide, so nothing moves as it grows. The editor and the exports show the finished slide; `hype export talk.pdf --steps` gives every step a page, as beamer does.
 
+Write math as in pandoc: `$E = mc^2$` in a line and `$$…$$` displayed. Real LaTeX sets it, in beamer's sans-serif math by default or its serif math with `math_font: serif`, with `amsmath`, `amssymb`, `mathtools`, and `bm` loaded. Formulas sit on the text's baseline at its size, take its color, and stay vector in PDF. It needs `latex` and `dvisvgm` from TeX Live; each formula is typeset once and cached in `~/.cache/hype/math`, and `hype check` names any formula LaTeX rejects.
+
 ## Present and export
 
 Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation from the selected slide. Press **Shift+F5** to start from the first slide, or return to it while already presenting. Click the slide to go to the next one. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.

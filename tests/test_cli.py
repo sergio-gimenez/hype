@@ -158,6 +158,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual((pages('finished.pdf'), pages('steps.pdf')), (2, 5))
         self.assertIn('Only a PDF', self.hype('export', self.deck, 'talk.pptx', '--steps', code=1).stderr)
 
+    @unittest.skipUnless(shutil.which('latex') and shutil.which('dvisvgm'), 'needs latex and dvisvgm')
+    def test_math_is_typeset_and_bad_formulas_are_reported(self):
+        self.write('# Energy $E = mc^2$\n\n$$\\int_0^1 x\\,dx$$\n\n---\n\nBroken $\\frac{1}{$\n')
+        report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)
+        self.assertEqual([(p['slide'], p['severity']) for p in report['problems']], [(2, 'error')])
+        self.assertIn('in $\\frac{1}{$', report['problems'][0]['message'])
+        self.hype('render', self.deck, '--slide', 1, '--width', 640)
+        self.assertEqual(self.png_size(self.root / 'slide-001.png'), (640, 360))
+
     def test_flags_export_without_a_display_and_need_a_presentation(self):
         self.write(DECK)
         self.hype(self.deck, '--pdf', 'flag.pdf')

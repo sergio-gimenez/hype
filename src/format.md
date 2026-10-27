@@ -94,6 +94,27 @@ finished slide, so text never moves as it appears. Exports show finished
 slides; `hype export talk.pdf --steps` gives each step a page, and
 `hype render --slide 3 --step 2` renders one step.
 
+## Math
+
+Write TeX math as pandoc reads it: `$E = mc^2$` in a line, and `$$…$$` for a
+displayed formula, centered when it stands on its own lines. LaTeX sets it as
+beamer does, in sans-serif; `math_font: serif` in the front matter takes
+beamer's serif math instead. `amsmath`, `amssymb`, `mathtools` and `bm` are
+loaded. A `$` needs a non-space after the opening one and before the closing
+one, so prices such as $5 stay text; write `\$` for a literal dollar.
+
+```markdown
+# Why the radio dominates
+
+$$\ell = \ell_{\text{radio}} + \ell_{\text{core}}$$
+
+with $\ell_{\text{radio}} \approx 5$–$20\,\text{ms}$
+```
+
+Math needs `latex` and `dvisvgm` from TeX Live. Each formula is typeset once
+and kept in `~/.cache/hype/math`. A formula LaTeX rejects shows as red TeX on
+its slide, and `hype check` reports LaTeX's message with the formula.
+
 ## Slides
 
 Separate slides with a line holding only `---`, with a blank line on either
