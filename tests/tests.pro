@@ -25,3 +25,5 @@ SOURCES += ../src/recovery.cpp
 HEADERS += ../src/filedialog.h
 SOURCES += ../src/math.cpp
 HEADERS += ../src/math.h
+SOURCES += ../src/mermaid.cpp
+HEADERS += ../src/mermaid.h

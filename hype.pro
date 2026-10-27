@@ -28,3 +28,5 @@ SOURCES += src/cli.cpp
 HEADERS += src/cli.h
 SOURCES += src/math.cpp
 HEADERS += src/math.h
+SOURCES += src/mermaid.cpp
+HEADERS += src/mermaid.h

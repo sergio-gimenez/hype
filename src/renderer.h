@@ -10,6 +10,7 @@ class QTextDocument;
 struct Media {
     QString file, path, poster, error, background;
     QString svg; // A ```svg fence, drawn as vectors where a picture would be
+    QString mermaid; // A ```mermaid fence, drawn the same way once Mermaid lays it out
     int svgBlocks = 0;
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
@@ -72,7 +73,11 @@ bool slideHidden(const QString &source);
 QString withSlideProperty(QString source, const QString &key, const QString &value);
 Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
-QStringList slideProblems(const QString &source, const QString &base);
+// The palette gives a Mermaid diagram the colors it is drawn in, so checking it reuses that drawing.
+class QSvgRenderer;
+// Draws an SVG on any painter; into a PDF it drops the invisible pens Qt would stroke there.
+void renderSvg(QSvgRenderer &svg, QPainter *painter, const QRectF &bounds);
+QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette = {});
 void layoutSlideText(QTextDocument &document, const QString &markdown, const QVariantMap &palette,
                      qreal fontSize, qreal width, bool centered, bool code);
 void paintSlide(QPainter *painter, const QRectF &target, const QString &source, const QString &base,

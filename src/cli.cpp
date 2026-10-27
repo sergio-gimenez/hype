@@ -57,7 +57,7 @@ QImage paint(const Deck &deck, int index, int width, QString *warning, int step 
 QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int index) {
     QList<Problem> problems;
     const int line = firstLine(deck.source(), parsed.slides[index]);
-    for (const auto &message : slideProblems(deck.slide(index), deck.baseDir()))
+    for (const auto &message : slideProblems(deck.slide(index), deck.baseDir(), deck.slidePalette(index)))
         problems << Problem{index + 1, line, true, message};
     if (deck.slide(index).trimmed().isEmpty())
         problems << Problem{index + 1, line, false, "Empty slide"};

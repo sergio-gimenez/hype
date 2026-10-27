@@ -167,6 +167,17 @@ class CliTests(unittest.TestCase):
         self.hype('render', self.deck, '--slide', 1, '--width', 640)
         self.assertEqual(self.png_size(self.root / 'slide-001.png'), (640, 360))
 
+    @unittest.skipUnless(shutil.which('mmdc') and shutil.which('pdftocairo'), 'needs mmdc and pdftocairo')
+    def test_mermaid_is_drawn_and_bad_diagrams_are_reported(self):
+        # Puppeteer finds its Chromium under the real home, which these tests swap out.
+        self.env.setdefault('PUPPETEER_CACHE_DIR', str(Path.home() / '.cache/puppeteer'))
+        self.write('# Flow\n\n```mermaid\nflowchart LR\n  a --> b\n```\n\n---\n\n```mermaid\nflowchart LR\n  a -->|oops b\n```\n')
+        report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)
+        self.assertEqual([(p['slide'], p['severity']) for p in report['problems']], [(2, 'error')])
+        self.assertIn('Parse error', report['problems'][0]['message'])
+        self.hype('render', self.deck, '--slide', 1, '--width', 640)
+        self.assertEqual(self.png_size(self.root / 'slide-001.png'), (640, 360))
+
     def test_flags_export_without_a_display_and_need_a_presentation(self):
         self.write(DECK)
         self.hype(self.deck, '--pdf', 'flag.pdf')

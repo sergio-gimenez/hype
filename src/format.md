@@ -187,6 +187,20 @@ without a color take the theme's text color, and text takes the font.
 ```
 ````
 
+A `mermaid` code block draws a Mermaid diagram in the same place, laid out as
+GitHub lays it out and in the deck's colors and font. `mermaid_theme:
+default`, `neutral`, `dark`, or `forest` in the front matter uses one of
+Mermaid's own themes instead. It needs the Mermaid CLI (`mmdc`) and
+`pdftocairo`; each diagram is drawn once and kept in `~/.cache/hype/mermaid`,
+and `hype check` reports Mermaid's message for a diagram it cannot draw.
+
+````markdown
+```mermaid
+flowchart LR
+  app -->|CAMARA call| OEG --> SRM
+```
+````
+
 An SVG file in `images/` can have its labels retyped on the slide: double-click
 one in the editor, type, and press Enter. To keep a drawing editable this way,
 write each label as its own `<text>` at one `x` and `y`, holding only its words:
