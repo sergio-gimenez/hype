@@ -507,6 +507,13 @@ int Deck::shownSlide(int from, int steps) const {
         }
     return qBound(0, reached, qMax(0, count() - 1));
 }
+int Deck::stepCount(int index) const {
+    if (index < 0 || index >= count())
+        return 1;
+    return slideSteps(slide(index), parseMedia(slide(index), baseDir()),
+                      palette().value("incremental").toBool())
+        .count();
+}
 QVector<int> Deck::exportedSlides() const {
     QVector<int> slides;
     for (int i = 0; i < count(); ++i)
@@ -622,6 +629,8 @@ QVariantMap Deck::palette() const {
     }
     if (const QString header = scalar(m_parsed.header, "header"); !header.isEmpty())
         colors["header"] = header;
+    if (scalar(m_parsed.header, "incremental") == "true")
+        colors["incremental"] = true;
     m_paletteHeader = m_parsed.header;
     m_paletteCache = colors;
     return colors;
@@ -1276,10 +1285,14 @@ QString Deck::savePastedMedia(const QString &value) {
     setStatus("Added " + name);
     return {};
 }
-QString Deck::renderId(int index) const {
-    auto &cached = m_renderIds[index];
+QString Deck::renderId(int index, int step) const {
+    // Build steps are drawn only while presenting, so they skip the cache kept for thumbnails.
+    RenderIdentity uncached;
+    auto &cached = step < 0 ? m_renderIds[index] : uncached;
     const QString source = slide(index), base = baseDir();
-    const auto colors = slidePalette(index);
+    auto colors = slidePalette(index);
+    if (step >= 0)
+        colors["step"] = step;
     if (cached.source == source && cached.base == base && cached.palette == colors &&
         cached.clock.isValid() && cached.clock.elapsed() < 1000)
         return cached.id;
@@ -1527,16 +1540,23 @@ bool Deck::exportPdf(const QString &path) {
             setStatus("Could not initialize PDF painter");
             return false;
         }
+        bool first = true;
         for (int n = 0; n < shown.size(); ++n) {
             const int i = shown[n];
             emit exportAdvanced(double(n) / shown.size(),
                                 QString("Exporting slide %1 of %2").arg(n + 1).arg(shown.size()));
-            if (n && !writer.newPage()) {
-                setStatus("Could not create PDF page");
-                return false;
+            auto colors = slidePalette(i);
+            for (int step = 0, steps = m_expandSteps ? stepCount(i) : 1; step < steps; ++step) {
+                if (!first && !writer.newPage()) {
+                    setStatus("Could not create PDF page");
+                    return false;
+                }
+                first = false;
+                if (m_expandSteps)
+                    colors["step"] = step;
+                paintSlide(&painter, QRectF(0, 0, writer.width(), writer.height()), slide(i), baseDir(),
+                           colors);
             }
-            paintSlide(&painter, QRectF(0, 0, writer.width(), writer.height()), slide(i), baseDir(),
-                       slidePalette(i));
         }
         painter.end();
     }

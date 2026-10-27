@@ -69,6 +69,7 @@ ApplicationWindow {
     property rect presentationReturnGeometry: Qt.rect(0, 0, 0, 0)
     function togglePresent() {
         presenting = !presenting
+        buildStep = 0
         if (presenting) {
             win.focusedEditor = ""
             // Window.screen follows the window as it moves. Save a stable display wrapper.
@@ -162,9 +163,18 @@ ApplicationWindow {
         deck.select(deck.shownSlide(-1, 1))
         if (!presenting) togglePresent()
     }
-    // Moving through a presentation skips hidden slides; editing visits every slide.
-    function step(delta) {
-        deck.select(presenting ? deck.shownSlide(deck.selected, delta) : deck.selected + delta)
+    // The build step shown while presenting; the editor always shows the finished slide.
+    property int buildStep: 0
+    // Presenting reveals each slide's build steps, then moves on, skipping hidden slides. Going
+    // back past the first step lands on the previous slide finished, as beamer does.
+    function advance(delta) {
+        if (!presenting) { deck.select(deck.selected + delta); return }
+        if (delta === 1 && buildStep < deck.stepCount(deck.selected) - 1) { buildStep++; return }
+        if (delta === -1 && buildStep > 0) { buildStep--; return }
+        const target = deck.shownSlide(deck.selected, delta)
+        if (target === deck.selected) return
+        deck.select(target)
+        buildStep = delta === -1 ? deck.stepCount(target) - 1 : 0
     }
     function toggleVideo() {
         if (player.playbackState === MediaPlayer.PlayingState) player.pause()
@@ -411,6 +421,7 @@ ApplicationWindow {
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
             const nextVideo = deck.media.video ? deck.media.url.toString() : ""
             const changedVideo = win.lastSelected !== deck.selected || player.source.toString() !== nextVideo
+            if (win.lastSelected !== deck.selected) win.buildStep = 0
             win.lastSelected = deck.selected
             if (changedVideo) {
                 player.stop()
@@ -465,7 +476,9 @@ ApplicationWindow {
                     Layout.fillWidth: true; elide: Text.ElideRight
                 }
                 Label {
+                    readonly property int steps: (deck.revision, deck.stepCount(deck.selected))
                     text: "Slide " + (deck.selected + 1) + " of " + deck.count
+                        + (steps > 1 ? " · step " + (win.buildStep + 1) + " of " + steps : "")
                     color: win.ui.muted; font.pixelSize: 16
                 }
                 Button {
@@ -489,7 +502,7 @@ ApplicationWindow {
                             color: deck.background; border.color: win.ui.border
                             Image {
                                 anchors.fill: parent
-                                source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
+                                source: "image://slides/" + (deck.revision, deck.renderId(deck.selected, win.buildStep))
                                 asynchronous: true; retainWhileLoading: true; cache: true
                                 sourceSize: Qt.size(960, 540)
                             }
@@ -507,17 +520,20 @@ ApplicationWindow {
                             height: width * 9 / 16
                             id: nextFrame
                             color: deck.background; border.color: win.ui.border
-                            // The next slide the talk will show, past any hidden ones.
-                            readonly property int next: (deck.revision, deck.shownSlide(deck.selected, 1))
+                            // What the talk shows next: this slide's next step, or the next slide
+                            // past any hidden ones.
+                            readonly property bool building: win.buildStep < (deck.revision, deck.stepCount(deck.selected)) - 1
+                            readonly property int next: building ? deck.selected : (deck.revision, deck.shownSlide(deck.selected, 1))
                             Image {
                                 anchors.fill: parent
-                                source: nextFrame.next > deck.selected
-                                    ? "image://slides/" + (deck.revision, deck.renderId(nextFrame.next)) : ""
+                                source: nextFrame.building || nextFrame.next > deck.selected
+                                    ? "image://slides/" + (deck.revision, deck.renderId(nextFrame.next,
+                                        nextFrame.building ? win.buildStep + 1 : 0)) : ""
                                 asynchronous: true; retainWhileLoading: true; cache: true
                                 sourceSize: Qt.size(640, 360)
                             }
                             Label {
-                                anchors.centerIn: parent; visible: nextFrame.next <= deck.selected
+                                anchors.centerIn: parent; visible: !nextFrame.building && nextFrame.next <= deck.selected
                                 text: "End of presentation"; color: win.ui.muted; font.pixelSize: 16
                             }
                         }
@@ -709,20 +725,20 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Shift+H"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting; onActivated: deck.toggleHidden() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+Return"; onActivated: { win.addSlide() } }
     Shortcut { sequence: "Delete"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.deleteSlide() }
-    Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(1) }
+    Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.advance(1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(1) }
     Shortcut { sequence: "Shift+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + 1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Down"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(win.presenting ? 1 : win.rowStep) }
+    Shortcut { sequence: "Down"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.advance(win.presenting ? 1 : win.rowStep) }
     Shortcut { sequence: "Ctrl+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(win.rowStep) }
     Shortcut { sequence: "Shift+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Left"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(-1) }
+    Shortcut { sequence: "Left"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.advance(-1) }
     Shortcut { sequence: "Ctrl+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-1) }
     Shortcut { sequence: "Shift+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(win.presenting ? -1 : -win.rowStep) }
+    Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.advance(win.presenting ? -1 : -win.rowStep) }
     Shortcut { sequence: "Ctrl+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-win.rowStep) }
     Shortcut { sequence: "Shift+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(5 * win.rowStep) }
-    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.step(-5 * win.rowStep) }
+    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.advance(5 * win.rowStep) }
+    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: win.advance(-5 * win.rowStep) }
     Shortcut { sequence: "Ctrl+PgDown"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(5) }
     Shortcut { sequence: "Ctrl+PgUp"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-5) }
     Shortcut { sequence: "Home"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(win.presenting ? deck.shownSlide(-1, 1) : 0) }
@@ -1508,12 +1524,13 @@ ApplicationWindow {
                         objectName: "slideQuickPreview"; anchors.fill: parent
                         visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== deck.selected && status === Image.Ready
                         // The same URL and size as the sidebar thumbnail, so it comes from Qt's pixmap cache.
-                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
+                        // A talk never flashes the finished slide before its first step.
+                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected, win.presenting ? win.buildStep : -1))
                         asynchronous: true; cache: true; sourceSize: Qt.size(340, 192)
                     }
                     Image {
                         id: slidePreview; objectName: "slidePreview"; anchors.fill: parent
-                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + (animation.active ? "/background" : "")
+                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected, win.presenting ? win.buildStep : -1)) + (animation.active ? "/background" : "")
                         asynchronous: true; retainWhileLoading: true; cache: true; sourceSize: Qt.size(1920, 1080)
                         property int shownSlide: -1
                         // On a new slide, let its thumbnail show while this render loads. Edits to
@@ -1569,7 +1586,7 @@ ApplicationWindow {
                     MouseArea {
                         anchors.fill: parent
                         enabled: win.presenting
-                        onClicked: win.step(1)
+                        onClicked: win.advance(1)
                     }
                 }
                 DropArea { anchors.fill: parent; onDropped: function(drop) { if (drop.hasUrls) for (let i = 0; i < drop.urls.length; ++i) { if (!deck.importMedia(drop.urls[i], i > 0)) break } } }

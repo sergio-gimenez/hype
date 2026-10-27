@@ -37,6 +37,17 @@ QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 QString speakerNotes(const QString &source);
+// Build steps, written as pandoc writes them for beamer: a line of ". . ." pauses, and each
+// item of an incremental list (`incremental: true`, or inside ::: incremental) is a step.
+struct SlideSteps {
+    QString text;      // The slide's text without the markers, trimmed as it is drawn.
+    QVector<int> cuts; // Where in text each step but the last ends.
+    int media = 0;     // The step the slide's picture appears on.
+    int count() const { return qMax(int(cuts.size()), media) + 1; }
+    // The text a step shows; a negative step is the finished slide.
+    QString shown(int step) const;
+};
+SlideSteps slideSteps(const QString &source, const Media &media, bool incremental);
 // A hidden slide stays in the deck but is skipped when presenting and left out of exports.
 bool slideHidden(const QString &source);
 // Sets an attribute in the slide's <!-- hype: --> comment; an empty value removes it.

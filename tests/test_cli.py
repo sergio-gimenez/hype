@@ -1,6 +1,7 @@
 """Exercise the headless commands as an agent would: no display, only files and JSON."""
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 import struct
@@ -142,6 +143,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual([s['image'] for s in manifest['slides']], ['slide-001.png', 'slide-003.png'])
         self.hype('render', self.deck, '-o', 'all', '--include-hidden')
         self.assertEqual(len(json.loads((self.root / 'all/slides.json').read_text())['slides']), 3)
+
+    def test_build_steps_are_listed_rendered_and_exported_as_pages(self):
+        self.write('---\nincremental: true\n---\n\n# One\n\n- a\n- b\n- c\n\n---\n\nBefore\n\n. . .\n\nAfter\n')
+        outline = json.loads(self.hype('slides', self.deck, '--json').stdout)
+        self.assertEqual([s['steps'] for s in outline['slides']], [3, 2])
+        self.assertIn('One  (3 steps)', self.hype('slides', self.deck).stdout)
+        self.hype('render', self.deck, '--slide', 1, '--step', 2, '--width', 320)
+        self.assertEqual(self.png_size(self.root / 'slide-001-step-2.png'), (320, 180))
+        self.assertIn('has no step 4; it has 3', self.hype('render', self.deck, '--slide', 1, '--step', 4, code=1).stderr)
+        pages = lambda name: len(re.findall(rb'/Type\s*/Page\b', (self.root / name).read_bytes()))
+        self.hype('export', self.deck, 'finished.pdf')
+        self.hype('export', self.deck, 'steps.pdf', '--steps')
+        self.assertEqual((pages('finished.pdf'), pages('steps.pdf')), (2, 5))
+        self.assertIn('Only a PDF', self.hype('export', self.deck, 'talk.pptx', '--steps', code=1).stderr)
 
     def test_flags_export_without_a_display_and_need_a_presentation(self):
         self.write(DECK)

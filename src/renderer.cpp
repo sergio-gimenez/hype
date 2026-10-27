@@ -451,6 +451,101 @@ Media parseMedia(const QString &source, const QString &base) {
     cache.insert(key, new Media(result), qMax(1, int((key.size() + result.text.size()) * 2)));
     return result;
 }
+// Takes out the step markers and notes where each step starts. Every pause and every
+// incremental item is a cut, even where two fall together, so two scans of the same slide
+// number their steps alike.
+static SlideSteps splitSteps(const QString &text, bool incremental) {
+    SlideSteps steps;
+    if (!incremental && !text.contains(". . .") && !text.contains(":::")) {
+        steps.text = text;
+        return steps;
+    }
+    static const QRegularExpression fenceRe("^ {0,3}(`{3,}|~{3,})(.*)$");
+    static const QRegularExpression pauseRe("^ {0,3}\\. \\. \\.\\s*$");
+    static const QRegularExpression divRe(
+        "^ {0,3}:{3,}\\s*(?:\\{\\s*\\.?([\\w-]+)\\s*\\}|([\\w-]+))?\\s*$");
+    static const QRegularExpression itemRe("^\\s*(?:>\\s*)*(?:[-*+]|\\d+[.)])\\s");
+    QVector<bool> modes{incremental};
+    QVector<bool> ours; // For each open div, whether it is an (non)incremental one.
+    QChar fence;
+    int fenceLength = 0;
+    // As in beamer, the first item after a pause, or at the top, shows with what precedes it.
+    bool fresh = true;
+    const QStringList lines = text.split('\n');
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString &line = lines[i];
+        const auto keep = [&] {
+            steps.text += line;
+            if (i + 1 < lines.size())
+                steps.text += '\n';
+        };
+        if (const auto match = fenceRe.match(line); match.hasMatch() || fenceLength) {
+            const QString run = match.captured(1);
+            if (!fenceLength && match.hasMatch()) {
+                fence = run[0];
+                fenceLength = run.size();
+            } else if (match.hasMatch() && run[0] == fence && run.size() >= fenceLength &&
+                       match.captured(2).trimmed().isEmpty())
+                fenceLength = 0;
+            keep();
+            continue;
+        }
+        if (pauseRe.match(line).hasMatch()) {
+            steps.cuts << int(steps.text.size());
+            fresh = true;
+            continue;
+        }
+        if (const auto div = divRe.match(line); div.hasMatch()) {
+            const QString name = div.captured(1) + div.captured(2);
+            if (name == "incremental" || name == "nonincremental") {
+                ours << true;
+                modes << (name == "incremental");
+                continue;
+            }
+            if (name.isEmpty() && !ours.isEmpty()) {
+                if (ours.takeLast()) {
+                    modes.removeLast();
+                    continue;
+                }
+            } else if (!name.isEmpty())
+                ours << false;
+        }
+        if (modes.last() && itemRe.match(line).hasMatch()) {
+            if (!fresh)
+                steps.cuts << int(steps.text.size());
+            fresh = false;
+        }
+        keep();
+    }
+    return steps;
+}
+SlideSteps slideSteps(const QString &source, const Media &media, bool incremental) {
+    SlideSteps steps = splitSteps(media.text, incremental);
+    // The picture is drawn apart from the text, on the step where its reference sits.
+    if (!media.file.isEmpty() || media.svgBlocks) {
+        const SlideSteps whole = splitSteps(withoutComments(source), incremental);
+        static const QRegularExpression svgFence("^ {0,3}(?:`{3,}|~{3,})\\s*svg\\b",
+                                                 QRegularExpression::MultilineOption);
+        const int at = !media.file.isEmpty() ? int(mediaRe.match(outsideCode(whole.text)).capturedStart())
+                                             : int(svgFence.match(whole.text).capturedStart());
+        for (int cut : whole.cuts)
+            steps.media += at >= 0 && cut <= at;
+    }
+    // Trim as the slide is drawn. A last step that shows nothing new is no step.
+    int lead = 0;
+    while (lead < steps.text.size() && steps.text[lead].isSpace())
+        ++lead;
+    steps.text = steps.text.trimmed();
+    for (int &cut : steps.cuts)
+        cut = qBound(0, cut - lead, int(steps.text.size()));
+    while (!steps.cuts.isEmpty() && steps.cuts.last() >= steps.text.size() &&
+           steps.media < steps.cuts.size())
+        steps.cuts.removeLast();
+    return steps;
+}
+QString SlideSteps::shown(int step) const {
+    return step < 0 || step >= cuts.size() ? text : text.left(cuts[step]);
+}
 static QString createPoster(const QString &video, const QString &base) {
     QFileInfo info(video);
     if (!info.exists())
@@ -959,7 +1054,11 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     if (!overlayOnly)
         p->fillRect(QRectF(0, 0, 1920, 1080), QColor(palette["background"].toString()));
     auto media = parseMedia(source, base);
-    QString text = media.text.trimmed();
+    // A build step shows part of the text, laid out as the whole so nothing moves as it grows.
+    const SlideSteps steps = slideSteps(source, media, palette.value("incremental").toBool());
+    const int step = palette.value("step", -1).toInt();
+    const bool showMedia = step < 0 || step >= steps.media;
+    const QString text = steps.text;
     auto problems = slideProblems(source, base);
     QRectF area(130, 90, 1660, 900);
     if (!media.svg.isEmpty() && media.file.isEmpty()) {
@@ -969,7 +1068,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         if (!text.isEmpty())
             area = QRectF(130, 40, 1660, 205);
         QSvgRenderer svg(themedSvg(media.svg, palette));
-        if (!overlayOnly && !backgroundOnly && svg.isValid() && !svg.viewBoxF().isEmpty()) {
+        if (!overlayOnly && !backgroundOnly && showMedia && svg.isValid() && !svg.viewBoxF().isEmpty()) {
             QSizeF size = svg.viewBoxF().size();
             size.scale(rect.size(), Qt::KeepAspectRatio);
             svg.setAspectRatioMode(Qt::KeepAspectRatio);
@@ -1047,7 +1146,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                                                  : QRectF(0, 1080 * (1 - at), 1920, 1080 * at),
                         QColor(media.background));
         }
-        if (!overlayOnly && !backgroundOnly && !image.isNull()) {
+        if (!overlayOnly && !backgroundOnly && showMedia && !image.isNull()) {
             const QRectF dest = mediaImageRect(media, image.size());
             p->save();
             p->setClipRect(rect);
@@ -1060,7 +1159,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                                        ? softenedImage(image, dest.size())
                                        : image);
             p->restore();
-        } else if (!overlayOnly && !backgroundOnly) {
+        } else if (!overlayOnly && !backgroundOnly && showMedia) {
             p->setPen(QColor(palette["accent"].toString()));
             const QString message = "Missing media\n" + media.file;
             QFont diagnostic("sans");
@@ -1154,7 +1253,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 sizeSlideText(doc, palette, low, area.width(), centered, code);
             rememberFit(fit, low);
         }
-        if (!code && doc.idealWidth() > area.width() + 1)
+        const bool breakWords = !code && doc.idealWidth() > area.width() + 1;
+        if (breakWords)
             sizeSlideText(doc, palette, low, area.width(), centered, code, true);
         highlightCode(doc, palette);
         if (fixed > 0 && low < fixed - 0.5 && warning)
@@ -1166,11 +1266,21 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         const qreal room = qMax(0.0, area.height() - doc.size().height());
         const bool top = vertical == "top" || (vertical.isEmpty() && fixed > 0);
         const qreal offset = vertical == "bottom" ? room : top ? 0 : room / 2;
+        // An earlier step lays out only its part at the size and place of the whole. Text flows
+        // from the top, so the part lands exactly where it sits on the finished slide.
+        QTextDocument part;
+        const QString shown = steps.shown(step);
+        if (shown.size() < text.size()) {
+            layoutSlideText(part, shown, palette, low, area.width(), centered, code);
+            if (breakWords)
+                sizeSlideText(part, palette, low, area.width(), centered, code, true);
+            highlightCode(part, palette);
+        }
         p->save();
         p->translate(area.x(), area.y() + offset);
         QAbstractTextDocumentLayout::PaintContext context;
         context.palette.setColor(QPalette::Text, QColor(palette["foreground"].toString()));
-        doc.documentLayout()->draw(p, context);
+        (shown.size() < text.size() ? part : doc).documentLayout()->draw(p, context);
         p->restore();
     }
     if (!header.isEmpty()) {

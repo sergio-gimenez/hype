@@ -753,7 +753,7 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!engine.rootObjects().isEmpty());
         auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
         auto step = [&](int delta) {
-            QVERIFY(QMetaObject::invokeMethod(window, "step", Q_ARG(QVariant, delta)));
+            QVERIFY(QMetaObject::invokeMethod(window, "advance", Q_ARG(QVariant, delta)));
         };
         QVERIFY(QMetaObject::invokeMethod(window, "presentFromBeginning"));
         QVERIFY(window->property("presenting").toBool());
@@ -774,6 +774,50 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(item->property("text").toString(), QString("Show slide"));
         deck.extendSelection(3);
         QCOMPARE(item->property("text").toString(), QString("Hide slides"));
+        window->setProperty("allowClose", true);
+        window->close();
+    }
+    void presentingRevealsBuildSteps() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        Deck deck;
+        deck.editSource("---\nincremental: true\n---\n\n# A\n\n- 1\n- 2\n\n---\n\n# B\n\n- x\n- y\n- z\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto advance = [&](int delta) {
+            QVERIFY(QMetaObject::invokeMethod(window, "advance", Q_ARG(QVariant, delta)));
+        };
+        const auto at = [&] {
+            return QPair<int, int>(deck.selected(), window->property("buildStep").toInt());
+        };
+        QVERIFY(QMetaObject::invokeMethod(window, "presentFromBeginning"));
+        QCOMPARE(at(), qMakePair(0, 0));
+        advance(1);
+        QCOMPARE(at(), qMakePair(0, 1));
+        advance(1);
+        QCOMPARE(at(), qMakePair(1, 0));
+        advance(1);
+        advance(1);
+        QCOMPARE(at(), qMakePair(1, 2));
+        advance(1);
+        QCOMPARE(at(), qMakePair(1, 2));
+        advance(-1);
+        QCOMPARE(at(), qMakePair(1, 1));
+        advance(-1);
+        advance(-1);
+        // Back past the first step lands on the previous slide, finished.
+        QCOMPARE(at(), qMakePair(0, 1));
+        // Jumping to a slide starts it from its first step.
+        deck.select(1);
+        QCOMPARE(at(), qMakePair(1, 0));
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
         window->setProperty("allowClose", true);
         window->close();
     }
@@ -1062,6 +1106,73 @@ static void write(const QString &path, const QString &content) {
         all.editSource("<!-- hype: hidden=\"true\" -->\n# One\n");
         QVERIFY(!all.exportPdf(tmp.filePath("none.pdf")));
         QVERIFY(all.status().contains("hidden"));
+    }
+    void buildStepsFollowPandoc() {
+        const auto steps = [](const QString &source, bool incremental = false) {
+            return slideSteps(source, parseMedia(source, QDir::tempPath()), incremental);
+        };
+        // A pause line cuts; the marker itself is never drawn.
+        auto paused = steps("# Title\n\nOne\n\n. . .\n\nTwo\n");
+        QCOMPARE(paused.count(), 2);
+        QVERIFY(!paused.text.contains(". . ."));
+        QCOMPARE(paused.shown(0).trimmed(), QString("# Title\n\nOne"));
+        QCOMPARE(paused.shown(1), paused.text);
+        QCOMPARE(paused.shown(-1), paused.text);
+        // Incremental items: the first shows with the title, as beamer's [<+->] does.
+        auto list = steps("# Title\n\n- a\n- b\n  - nested\n- c\n", true);
+        QCOMPARE(list.count(), 4);
+        QCOMPARE(list.shown(0).trimmed(), QString("# Title\n\n- a"));
+        QCOMPARE(list.shown(2).trimmed(), QString("# Title\n\n- a\n- b\n  - nested"));
+        QCOMPARE(steps("- a\n- b\n").count(), 1);
+        // Fenced divs switch it on and off, and their markers go; other divs stay as written.
+        auto divs = steps("::: incremental\n- a\n- b\n:::\n\n::: nonincremental\n- c\n- d\n:::\n");
+        QCOMPARE(divs.count(), 2);
+        QVERIFY(!divs.text.contains(":::"));
+        QCOMPARE(steps("::: {.incremental}\n- a\n- b\n:::\n").count(), 2);
+        QVERIFY(steps("::: notes\nkeep\n:::\n").text.contains("::: notes"));
+        // Code keeps its markers and its list-like lines.
+        auto code = steps("```sh\n- a\n. . .\n- b\n```\n", true);
+        QCOMPARE(code.count(), 1);
+        QVERIFY(code.text.contains(". . ."));
+        // A first item after a pause shows with the pause, not one step later.
+        QCOMPARE(steps("Intro\n\n. . .\n\n- a\n- b\n", true).count(), 3);
+        // A picture after a pause appears on that step; a pause with nothing after it is dropped.
+        auto picture = steps("# Title\n\n. . .\n\n![](diagram.png)\n");
+        QCOMPARE(picture.count(), 2);
+        QCOMPARE(picture.media, 1);
+        QCOMPARE(picture.shown(0), picture.text);
+        QCOMPARE(steps("# Title\n\n. . .\n").count(), 1);
+        QCOMPARE(steps("```svg\n<svg/>\n```\n\n. . .\n\nAfter\n").media, 0);
+        QCOMPARE(steps("Before\n\n. . .\n\n```svg\n<svg/>\n```\n").media, 1);
+    }
+    void buildStepsKeepTheirPlace() {
+        Deck d;
+        d.editSource("---\nincremental: true\n---\n\n# Title\n\n- First point\n- Second point\n- Third point\n");
+        QCOMPARE(d.stepCount(0), 3);
+        QVERIFY(d.renderId(0, 0) != d.renderId(0, 1));
+        QVERIFY(d.renderId(0, 0) != d.renderId(0));
+        const auto render = [&](int step) {
+            QImage image(960, 540, QImage::Format_ARGB32_Premultiplied);
+            QPainter p(&image);
+            auto palette = d.slidePalette(0);
+            if (step >= 0)
+                palette["step"] = step;
+            paintSlide(&p, image.rect(), d.slide(0), d.baseDir(), palette);
+            return image;
+        };
+        const QImage first = render(0), finished = render(-1);
+        QVERIFY(first != finished);
+        QCOMPARE(render(2), finished);
+        // What the first step shows sits exactly where it does on the finished slide.
+        int changed = -1;
+        for (int y = 0; y < first.height() && changed < 0; ++y)
+            if (memcmp(first.constScanLine(y), finished.constScanLine(y), first.bytesPerLine()))
+                changed = y;
+        QVERIFY(changed > 0);
+        const QImage rest = first.copy(0, changed, first.width(), first.height() - changed);
+        QImage empty(rest.size(), rest.format());
+        empty.fill(QColor(d.background()));
+        QCOMPARE(rest, empty);
     }
     void editingCannotEatSeparator() {
         Deck d;
