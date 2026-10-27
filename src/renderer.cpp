@@ -642,6 +642,55 @@ static QString slideProperty(const QString &source, const QString &key) {
     QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
     return re.match(source).captured(1);
 }
+bool slideHidden(const QString &source) {
+    // Most slides never mention it, so skip the pattern for them. A code sample showing the
+    // comment does not hide its slide.
+    return source.contains("hidden=") && slideProperty(outsideCode(source), "hidden") == "true";
+}
+QString withSlideProperty(QString source, const QString &key, const QString &value) {
+    static const QRegularExpression comment("<!--\\s*hype:([\\s\\S]*?)-->");
+    const QRegularExpression attribute("\\s*\\b" + key + "=\"[^\"]*\"");
+    QVector<QRegularExpressionMatch> found;
+    auto matches = comment.globalMatch(outsideCode(source));
+    while (matches.hasNext())
+        found << matches.next();
+    // Work from the last comment back, so earlier offsets stay valid. The first one takes the value.
+    for (qsizetype n = found.size() - 1; n >= 0; --n) {
+        const auto &m = found[n];
+        QString body = source.mid(m.capturedStart(1), m.capturedLength(1));
+        const bool had = body.contains(attribute);
+        body.remove(attribute);
+        body = body.trimmed();
+        if (n == 0 && !value.isEmpty())
+            body += (body.isEmpty() ? "" : " ") + key + "=\"" + value + "\"";
+        else if (!had)
+            continue;
+        int start = m.capturedStart(), end = m.capturedEnd();
+        if (body.isEmpty()) {
+            // A comment alone on its line leaves no blank line behind.
+            // A negative lastIndexOf start counts from the end, so the first line needs no search.
+            const int lineStart = start > 0 ? source.lastIndexOf('\n', start - 1) + 1 : 0;
+            int lineEnd = source.indexOf('\n', end);
+            if (lineEnd < 0)
+                lineEnd = source.size();
+            if (source.mid(lineStart, start - lineStart).trimmed().isEmpty() &&
+                source.mid(end, lineEnd - end).trimmed().isEmpty()) {
+                start = lineStart;
+                end = qMin(lineEnd + 1, int(source.size()));
+            }
+            source.remove(start, end - start);
+        } else {
+            source.replace(start, end - start, "<!-- hype: " + body + " -->");
+        }
+    }
+    if (found.isEmpty() && !value.isEmpty()) {
+        int first = 0;
+        while (first < source.size() && source[first].isSpace())
+            ++first;
+        source.insert(first, "<!-- hype: " + key + "=\"" + value + "\" -->\n");
+    }
+    return source;
+}
 static QString preserveLineBreaks(QString markdown) {
     markdown.replace("\r\n", "\n").replace('\r', '\n');
     const QStringList visible = outsideCode(markdown, false).split('\n');

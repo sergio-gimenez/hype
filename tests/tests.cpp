@@ -737,6 +737,46 @@ static void write(const QString &path, const QString &content) {
         window->setProperty("allowClose", true);
         window->close();
     }
+    void presentingSkipsHiddenSlides() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        Deck deck;
+        deck.editSource("<!-- hype: hidden=\"true\" -->\n# Zero\n---\n# One\n---\n"
+                        "<!-- hype: hidden=\"true\" -->\n# Two\n---\n# Three\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto step = [&](int delta) {
+            QVERIFY(QMetaObject::invokeMethod(window, "step", Q_ARG(QVariant, delta)));
+        };
+        QVERIFY(QMetaObject::invokeMethod(window, "presentFromBeginning"));
+        QVERIFY(window->property("presenting").toBool());
+        QCOMPARE(deck.selected(), 1);
+        step(1);
+        QCOMPARE(deck.selected(), 3);
+        step(1);
+        QCOMPARE(deck.selected(), 3);
+        step(-1);
+        QCOMPARE(deck.selected(), 1);
+        // Editing still visits every slide, and the menu says what it will do to the selection.
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(!window->property("presenting").toBool());
+        step(1);
+        QCOMPARE(deck.selected(), 2);
+        auto item = window->findChild<QObject *>("hideSlideItem");
+        QVERIFY(item);
+        QCOMPARE(item->property("text").toString(), QString("Show slide"));
+        deck.extendSelection(3);
+        QCOMPARE(item->property("text").toString(), QString("Hide slides"));
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void presenterViewUsesSeparateScreens() {
         if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
             QSKIP("Set HYPE_GUI_TESTS=1");
@@ -943,6 +983,85 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(d.slideSource().trimmed().isEmpty());
         d.undo();
         QCOMPARE(d.count(), 4);
+    }
+    void slidePropertyWritesTheHypeComment() {
+        // A slide without a comment gets one above its content.
+        QCOMPARE(withSlideProperty("\n# One\n", "hidden", "true"),
+                 QString("\n<!-- hype: hidden=\"true\" -->\n# One\n"));
+        // An existing comment keeps its other attributes, and setting twice does not repeat.
+        const QString sectioned = "<!-- hype: section=\"Context\" -->\n# One\n";
+        const QString hidden = withSlideProperty(sectioned, "hidden", "true");
+        QCOMPARE(hidden, QString("<!-- hype: section=\"Context\" hidden=\"true\" -->\n# One\n"));
+        QCOMPARE(withSlideProperty(hidden, "hidden", "true"), hidden);
+        QCOMPARE(withSlideProperty(hidden, "hidden", ""), sectioned);
+        // A comment left empty goes, with its line.
+        QCOMPARE(withSlideProperty("<!-- hype: hidden=\"true\" -->\n# One\n", "hidden", ""),
+                 QString("# One\n"));
+        // Notes and code samples are not hype comments.
+        const QString code = "<!-- a note -->\n```html\n<!-- hype: hidden=\"true\" -->\n```\n";
+        QCOMPARE(withSlideProperty(code, "hidden", ""), code);
+        QVERIFY(!slideHidden(code));
+        QVERIFY(slideHidden("<!-- hype: hidden=\"true\" -->\n# One"));
+        QVERIFY(!slideHidden("<!-- hype: hidden=\"false\" -->\n# One"));
+        QVERIFY(!slideHidden("<!-- hidden=\"true\" -->\n# One"));
+    }
+    void hiddenSlidesAreSkippedAndUnnumbered() {
+        Deck d;
+        d.editSource("---\nheader: \"Talk\"\n---\n\n# One\n\n---\n\n# Two\n\n---\n\n# Three\n\n---\n\n# Four\n");
+        const QString original = d.source();
+        d.select(1);
+        d.extendSelection(2);
+        QVERIFY(!d.selectionHidden());
+        d.toggleHidden();
+        QVERIFY(d.selectionHidden());
+        QCOMPARE(d.selectionFirst(), 1);
+        QCOMPARE(d.selectionLast(), 2);
+        QVERIFY(!d.isHidden(0) && d.isHidden(1) && d.isHidden(2) && !d.isHidden(3));
+        QVERIFY(d.slide(1).contains("<!-- hype: hidden=\"true\" -->\n# Two"));
+        // Presenting moves between shown slides only, and stays put at either end.
+        QCOMPARE(d.shownSlide(0, 1), 3);
+        QCOMPARE(d.shownSlide(3, -1), 0);
+        QCOMPARE(d.shownSlide(3, 1), 3);
+        QCOMPARE(d.shownSlide(1, 1), 3);
+        QCOMPARE(d.shownSlide(-1, 1), 0);
+        QCOMPARE(d.shownSlide(d.count(), -1), 3);
+        // The running header counts shown slides; hidden ones carry no number.
+        QCOMPARE(d.slidePalette(3)["slide_number"].toInt(), 2);
+        QCOMPARE(d.slidePalette(3)["slide_count"].toInt(), 2);
+        QCOMPARE(d.slidePalette(1)["slide_number"].toInt(), 0);
+        QCOMPARE(d.exportedSlides(), QVector<int>({0, 3}));
+        d.setIncludeHidden(true);
+        QCOMPARE(d.exportedSlides(), QVector<int>({0, 1, 2, 3}));
+        d.setIncludeHidden(false);
+        // A mixed selection hides the rest; a fully hidden one shows again.
+        d.select(2);
+        d.extendSelection(3);
+        d.toggleHidden();
+        QVERIFY(d.isHidden(2) && d.isHidden(3));
+        d.toggleHidden();
+        QVERIFY(d.isHidden(1) && !d.isHidden(2) && !d.isHidden(3));
+        d.undo();
+        d.undo();
+        d.undo();
+        QCOMPARE(d.source(), original);
+    }
+    void exportsLeaveHiddenSlidesOut() {
+        QTemporaryDir tmp;
+        Deck d;
+        d.editSource("# One\n\n---\n\n<!-- hype: hidden=\"true\" -->\n![](missing.png)\n\n---\n\n# Three\n");
+        // A hidden slide's problems do not stop an export that leaves it out.
+        QVERIFY(d.renderImages(tmp.filePath("shown"), 320));
+        QVERIFY(QFile::exists(tmp.filePath("shown/slide-001.png")));
+        QVERIFY(!QFile::exists(tmp.filePath("shown/slide-002.png")));
+        QVERIFY(QFile::exists(tmp.filePath("shown/slide-003.png")));
+        QVERIFY(d.exportPdf(tmp.filePath("talk.pdf")));
+        d.setIncludeHidden(true);
+        QVERIFY(!d.exportPdf(tmp.filePath("all.pdf")));
+        QVERIFY(d.status().contains("missing.png"));
+        Deck all;
+        all.editSource("<!-- hype: hidden=\"true\" -->\n# One\n");
+        QVERIFY(!all.exportPdf(tmp.filePath("none.pdf")));
+        QVERIFY(all.status().contains("hidden"));
     }
     void editingCannotEatSeparator() {
         Deck d;

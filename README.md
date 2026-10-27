@@ -165,6 +165,8 @@ Colors and the font choice are saved in the Markdown file. Install the same font
 
 Talks want big text that fills each slide; a proposal or brand book wants the same type on every page. Fix it in the front matter: `text_size: 24` sets body text to 24 pixels on a 1080p slide everywhere, headings take `heading_size` (64, say), and text starts at the top of its area so headings line up from slide to slide. Text still shrinks when a slide holds too much, and `hype check` says so. `heading_font: "Newsreader"` sets headings in a second font and `heading_weight: 400` sets their weight. `header: "Company · Proposal"` adds a small running header with the slide's section and number on the right; name a slide's section with `<!-- hype: section="Context" -->`, and move its text with `vertical="center"` or `vertical="bottom"`.
 
+Keep a backup slide without showing it: right-click it and choose Hide slide, or add `hidden="true"` to its `hype` comment. A hidden slide stays in the deck, dimmed in the sidebar, but presenting skips it and PDF and PowerPoint exports leave it out; `hype export --include-hidden` keeps it.
+
 ## Present and export
 
 Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation from the selected slide. Press **Shift+F5** to start from the first slide, or return to it while already presenting. Click the slide to go to the next one. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.
@@ -229,6 +231,7 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Shift+arrows / Shift+click | Extend the slide selection |
 | Ctrl+Enter | Add a slide |
 | Ctrl+D | Duplicate selected slides |
+| Ctrl+Shift+H | Hide or show selected slides |
 | Delete | Delete selected slides |
 | Ctrl+V | Paste text or add and name media |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |

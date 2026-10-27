@@ -66,6 +66,10 @@ comment:
 `vertical` is `top`, `center`, or `bottom`; text is centered unless the deck
 has a `text_size`, where it starts at the top.
 
+`hidden="true"` keeps a slide in the deck but out of the talk: presenting
+skips it, exports leave it out, and the running header does not count it.
+`hype export` and `hype render` take `--include-hidden` to keep such slides.
+
 ## Slides
 
 Separate slides with a line holding only `---`, with a blank line on either

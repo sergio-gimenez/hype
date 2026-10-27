@@ -126,6 +126,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual((self.root / 'talk.pptx').read_bytes()[:2], b'PK')
         self.assertIn('.pdf or .pptx', self.hype('export', self.deck, 'talk.key', code=1).stderr)
 
+    def test_hidden_slides_are_listed_and_left_out_of_exports(self):
+        self.write('# One\n\n---\n\n<!-- hype: hidden="true" -->\n# Backup\n\n---\n\n# Three\n')
+        outline = json.loads(self.hype('slides', self.deck, '--json').stdout)
+        self.assertEqual([s['hidden'] for s in outline['slides']], [False, True, False])
+        self.assertIn('Backup  (hidden)', self.hype('slides', self.deck).stdout)
+        self.assertEqual(json.loads(self.hype('check', self.deck, '--json').stdout)['hidden'], 1)
+        self.assertIn('3 slides (1 hidden), 0 errors', self.hype('check', self.deck).stdout)
+        exported = json.loads(self.hype('export', self.deck, 'talk.pptx', '--json').stdout)
+        self.assertEqual(exported['slides'], 2)
+        exported = json.loads(self.hype('export', self.deck, 'all.pdf', '--include-hidden', '--json').stdout)
+        self.assertEqual(exported['slides'], 3)
+        self.hype('render', self.deck, '-o', 'shown')
+        manifest = json.loads((self.root / 'shown/slides.json').read_text())
+        self.assertEqual([s['image'] for s in manifest['slides']], ['slide-001.png', 'slide-003.png'])
+        self.hype('render', self.deck, '-o', 'all', '--include-hidden')
+        self.assertEqual(len(json.loads((self.root / 'all/slides.json').read_text())['slides']), 3)
+
     def test_flags_export_without_a_display_and_need_a_presentation(self):
         self.write(DECK)
         self.hype(self.deck, '--pdf', 'flag.pdf')
