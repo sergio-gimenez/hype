@@ -53,7 +53,7 @@ ApplicationWindow {
     property bool presenting: false
     readonly property bool popupOpen: pasteDialog.visible || compressionDialog.visible ||
         historyDialog.visible || closeDialog.visible || shortcutsOverlay.visible || themes.popup.visible || fonts.popup.visible ||
-        slideMenu.visible || fileMenu.visible || slideBar.menuOpen || sourceBar.menuOpen
+        slideMenu.visible || fileMenu.visible || slideBar.menuOpen || sourceBar.menuOpen || labelEditor.visible
     property var compressionReturnFocus: null
     property bool allowClose: false
     property int lastSelected: -1
@@ -1587,6 +1587,53 @@ ApplicationWindow {
                         anchors.fill: parent
                         enabled: win.presenting
                         onClicked: win.advance(1)
+                    }
+                    // Double-click a label in the slide's SVG to retype it in place.
+                    TapHandler {
+                        enabled: !win.presenting && !labelEditor.visible
+                        onDoubleTapped: function(point) {
+                            const label = deck.svgLabelAt(point.position.x * 1920 / slideFrame.width,
+                                                          point.position.y * 1080 / slideFrame.height)
+                            if (label.file) labelEditor.edit(label)
+                        }
+                    }
+                    TextField {
+                        id: labelEditor; objectName: "labelEditor"
+                        property var label: ({})
+                        readonly property real scale: slideFrame.width / 1920
+                        visible: false; z: 5
+                        font.family: label.family || win.font.family
+                        font.pixelSize: Math.max(8, Math.round((label.fontSize || 16) * scale))
+                        font.weight: label.weight || Font.Normal
+                        color: win.ui.foreground
+                        leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
+                        horizontalAlignment: label.anchor === "middle" ? Text.AlignHCenter
+                            : label.anchor === "end" ? Text.AlignRight : Text.AlignLeft
+                        // Grows with the text from the label's anchor, as the SVG will.
+                        width: Math.max((label.width || 0) * scale, labelMetrics.advanceWidth) + leftPadding + rightPadding + 12
+                        height: (label.height || 0) * scale + topPadding + bottomPadding
+                        x: (label.anchor === "middle" ? ((label.x || 0) + (label.width || 0) / 2) * scale - width / 2
+                            : label.anchor === "end" ? ((label.x || 0) + (label.width || 0)) * scale - width + rightPadding
+                            : (label.x || 0) * scale - leftPadding)
+                        y: (label.y || 0) * scale - topPadding
+                        background: Rectangle { color: win.ui.background; radius: win.softRadius; border.color: win.ui.accent; border.width: 2 }
+                        TextMetrics { id: labelMetrics; font: labelEditor.font; text: labelEditor.text }
+                        function edit(found) {
+                            label = found
+                            text = found.text
+                            visible = true
+                            forceActiveFocus()
+                            selectAll()
+                        }
+                        function commit() {
+                            if (!visible) return
+                            visible = false
+                            deck.editSvgLabel(label.file, label.start, label.end, label.raw, text)
+                            stage.forceActiveFocus()
+                        }
+                        onAccepted: commit()
+                        onActiveFocusChanged: if (!activeFocus) commit()
+                        Keys.onEscapePressed: { visible = false; stage.forceActiveFocus() }
                     }
                 }
                 DropArea { anchors.fill: parent; onDropped: function(drop) { if (drop.hasUrls) for (let i = 0; i < drop.urls.length; ++i) { if (!deck.importMedia(drop.urls[i], i > 0)) break } } }

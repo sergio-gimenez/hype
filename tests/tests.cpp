@@ -94,6 +94,10 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(f.open(QIODevice::WriteOnly));
         f.write(content.toUtf8());
     }
+    static QByteArray read(const QString &path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+    }
     // Builds original/ with nested, hidden, unreferenced, and poster-cache media.
     static QString nestedMediaDeck(const QTemporaryDir &tmp) {
         const QString original = tmp.filePath("original");
@@ -821,6 +825,55 @@ static void write(const QString &path, const QString &content) {
         window->setProperty("allowClose", true);
         window->close();
     }
+    void doubleClickRetypesSvgLabel() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        QTemporaryDir tmp;
+        QDir().mkpath(tmp.filePath("images"));
+        const QByteArray original = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1600 900\">\n"
+                                    "  <text x=\"800\" y=\"450\" font-size=\"120\" text-anchor=\"middle\">Old</text>\n</svg>\n";
+        write(tmp.filePath("images/diagram.svg"), original);
+        write(tmp.filePath("talk.md"), "![](diagram.svg)\n\n---\n\n# Two\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(tmp.filePath("talk.md"), false));
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto frame = window->findChild<QQuickItem *>("slideFrame");
+        auto editor = window->findChild<QQuickItem *>("labelEditor");
+        QVERIFY(frame && editor);
+        QTRY_VERIFY(frame->width() > 0);
+        // The label sits at the middle of the picture, which fills the slide.
+        const QPoint middle = frame->mapToScene(QPointF(frame->width() / 2, frame->height() / 2 - 10)).toPoint();
+        QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, middle);
+        QTRY_VERIFY(editor->isVisible());
+        QCOMPARE(editor->property("text").toString(), QString("Old"));
+        QTRY_VERIFY(editor->hasActiveFocus());
+        // Slide shortcuts stay quiet while a label is being typed.
+        QTest::keyClick(window, Qt::Key_Delete);
+        QCOMPARE(deck.count(), 2);
+        editor->setProperty("text", "New label");
+        QTest::keyClick(window, Qt::Key_Return);
+        QVERIFY(!editor->isVisible());
+        QByteArray expected = original;
+        expected.replace(">Old<", ">New label<");
+        QCOMPARE(read(tmp.filePath("images/diagram.svg")), expected);
+        // Escape leaves the file alone.
+        QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, middle);
+        QTRY_VERIFY(editor->isVisible());
+        editor->setProperty("text", "Discarded");
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!editor->isVisible());
+        QCOMPARE(read(tmp.filePath("images/diagram.svg")), expected);
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void presenterViewUsesSeparateScreens() {
         if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
             QSKIP("Set HYPE_GUI_TESTS=1");
@@ -1173,6 +1226,88 @@ static void write(const QString &path, const QString &content) {
         QImage empty(rest.size(), rest.format());
         empty.fill(QColor(d.background()));
         QCOMPARE(rest, empty);
+    }
+    void svgLabelsAreFoundAndRetyped() {
+        const QString svg = QString::fromUtf8(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1800 700\" font-family=\"Roboto\">\n"
+            "  <rect x=\"890\" y=\"40\" width=\"850\" height=\"120\" fill=\"#FF5F00\"/>\n"
+            "  <text x=\"1315\" y=\"93\" font-size=\"34\" font-weight=\"500\" fill=\"#FFFFFF\" "
+            "text-anchor=\"middle\">i2catOP (OEG → SRM)</text>\n"
+            "  <g font-size=\"22\"><text x=\"90\" y=\"445\">R&amp;D · designed</text></g>\n"
+            "  <text x=\"10\" y=\"600\">a<tspan>b</tspan></text>\n"
+            "  <g transform=\"translate(5 5)\"><text x=\"10\" y=\"650\" font-size=\"20\">moved</text></g>\n"
+            "</svg>\n");
+        QRectF viewBox;
+        const auto labels = svgLabels(svg, &viewBox);
+        QCOMPARE(viewBox, QRectF(0, 0, 1800, 700));
+        // Only text at one place, holding only text, can be retyped in place.
+        QCOMPARE(labels.size(), 2);
+        QCOMPARE(labels[0].text, QString::fromUtf8("i2catOP (OEG → SRM)"));
+        QCOMPARE(labels[0].anchor, QString("middle"));
+        QCOMPARE(labels[0].weight, 500);
+        QVERIFY(qAbs(labels[0].box.center().x() - 1315) < 1);
+        QVERIFY(labels[0].box.top() < 93 && labels[0].box.bottom() > 93);
+        QCOMPARE(labels[1].text, QString("R&D · designed"));
+        QCOMPARE(labels[1].raw, QString("R&amp;D · designed"));
+        QCOMPARE(labels[1].size, 22.0);
+        QCOMPARE(svg.mid(labels[1].start, labels[1].end - labels[1].start), labels[1].raw);
+        // Retyping changes those characters and nothing else, escaping what XML needs.
+        const QString edited = withSvgLabel(svg, labels[1], "Q&A <live>");
+        QVERIFY(edited.contains(">Q&amp;A &lt;live&gt;</text>"));
+        QCOMPARE(edited.size() - svg.size(), QString("Q&amp;A &lt;live&gt;").size() - labels[1].raw.size());
+        QCOMPARE(svgLabels(edited)[1].text, QString("Q&A <live>"));
+    }
+    void svgLabelEditsWriteTheFileWithUndo() {
+        QTemporaryDir tmp;
+        QDir().mkpath(tmp.filePath("images"));
+        const QByteArray original =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1600 900\">\n"
+            "  <text x=\"800\" y=\"300\" font-size=\"60\" text-anchor=\"middle\">Old title</text>\n"
+            "  <text x=\"100\" y=\"700\" font-size=\"30\">footnote</text>\n</svg>\n";
+        write(tmp.filePath("images/diagram.svg"), original);
+        write(tmp.filePath("talk.md"), "# Before\n\n---\n\n![](diagram.svg)\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.filePath("talk.md"), false));
+        QVERIFY(d.svgLabelAt(960, 540).isEmpty()); // A slide without a picture.
+        d.select(1);
+        // Find each label through the point where it is drawn on the slide.
+        QRectF viewBox;
+        const auto labels = svgLabels(QString::fromUtf8(original), &viewBox);
+        const QRectF drawn = svgDrawnRect(parseMedia(d.slide(1), d.baseDir()), viewBox);
+        const qreal scale = drawn.width() / viewBox.width();
+        const auto at = [&](const SvgLabel &label) {
+            return d.svgLabelAt(drawn.x() + label.box.center().x() * scale,
+                                drawn.y() + label.box.center().y() * scale);
+        };
+        QCOMPARE(at(labels[1])["text"].toString(), QString("footnote"));
+        const auto title = at(labels[0]);
+        QCOMPARE(title["text"].toString(), QString("Old title"));
+        QCOMPARE(title["fontSize"].toDouble(), 60 * scale);
+        QVERIFY(d.svgLabelAt(drawn.center().x(), drawn.bottom() - 2).isEmpty());
+        const QString file = title["file"].toString();
+        const auto edit = [&](const QVariantMap &label, const QString &text) {
+            return d.editSvgLabel(label["file"].toString(), label["start"].toInt(), label["end"].toInt(),
+                                  label["raw"].toString(), text);
+        };
+        QVERIFY(edit(title, "New title"));
+        QByteArray expected = original;
+        expected.replace("Old title", "New title");
+        QCOMPARE(read(file), expected);
+        // The deck's own undo puts the file back, and redo takes the edit again.
+        QVERIFY(!d.dirty());
+        d.undo();
+        QCOMPARE(read(file), original);
+        d.redo();
+        QCOMPARE(read(file), expected);
+        // A label picked before the file changed is refused, and so is a file outside the deck.
+        QVERIFY(!edit(title, "Stale"));
+        QCOMPARE(read(file), expected);
+        QTemporaryDir elsewhere;
+        write(elsewhere.filePath("other.svg"), original);
+        auto outside = title;
+        outside["file"] = elsewhere.filePath("other.svg");
+        QVERIFY(!edit(outside, "Nope"));
+        QCOMPARE(read(elsewhere.filePath("other.svg")), original);
     }
     void editingCannotEatSeparator() {
         Deck d;

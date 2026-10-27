@@ -151,6 +151,8 @@ To draw something yourself, write SVG in an `svg` code block. It takes the place
 ```
 ````
 
+Fix a word in a diagram without leaving the slide: double-click a label in an SVG image, type, and press Enter (Escape cancels). Hype rewrites only that label's text in the file in `images/`, so the rest of the SVG stays exactly as it was written, and Ctrl+Z puts the file back. This works for labels written as one `<text>` at an `x` and `y` with no `<tspan>` or `transform`, which is how agents draw; it is for retyping, not for moving shapes, and labels in an `svg` code block are edited in the Markdown instead.
+
 Animated WebP and GIF images play inline in the preview and while presenting. Use the usual image syntax, such as `![](demo.webp)`, with the file in `images/`. Space pauses or resumes animations while presenting; PowerPoint exports automatically convert them to embedded MP4 videos, preserving the slide layout and playback settings. PDF exports capture their first frame.
 
 Each slide supports one image or video. Copy the whole presentation folder when sharing or moving it.

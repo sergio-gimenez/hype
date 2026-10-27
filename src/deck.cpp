@@ -273,7 +273,7 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
         return;
     }
     if (history) {
-        m_undo.append({m_source, m_selected, m_anchor, m_parsed});
+        m_undo.append(snapshot());
         if (m_undo.size() > 200)
             m_undo.removeFirst();
         m_redo.clear();
@@ -514,6 +514,88 @@ int Deck::stepCount(int index) const {
                       palette().value("incremental").toBool())
         .count();
 }
+// The selected slide's picture, when it is an SVG file whose labels can be retyped.
+QString Deck::editableSvg() const {
+    const auto media = parseMedia(slideSource(), baseDir());
+    if (media.file.isEmpty() || media.video || QFileInfo(media.path).suffix().toLower() != "svg" ||
+        !QFileInfo(media.path).isFile())
+        return {};
+    return media.path;
+}
+QVariantMap Deck::svgLabelAt(double x, double y) const {
+    const QString path = editableSvg();
+    QFile file(path);
+    if (path.isEmpty() || !file.open(QIODevice::ReadOnly))
+        return {};
+    QRectF viewBox;
+    const auto labels = svgLabels(QString::fromUtf8(file.readAll()), &viewBox);
+    if (viewBox.isEmpty())
+        return {};
+    const QRectF drawn = svgDrawnRect(parseMedia(slideSource(), baseDir()), viewBox);
+    const qreal scale = drawn.width() / viewBox.width();
+    const QPointF point((x - drawn.x()) / scale + viewBox.x(), (y - drawn.y()) / scale + viewBox.y());
+    // A little slack around each label, and the smallest one wins where they overlap.
+    const SvgLabel *hit = nullptr;
+    for (const auto &label : labels)
+        if (label.box.adjusted(-6, -6, 6, 6).contains(point) &&
+            (!hit || label.box.width() * label.box.height() < hit->box.width() * hit->box.height()))
+            hit = &label;
+    if (!hit)
+        return {};
+    const QRectF box(drawn.x() + (hit->box.x() - viewBox.x()) * scale,
+                     drawn.y() + (hit->box.y() - viewBox.y()) * scale, hit->box.width() * scale,
+                     hit->box.height() * scale);
+    return {{"file", path}, {"text", hit->text.simplified()}, {"raw", hit->raw}, {"start", hit->start},
+            {"end", hit->end}, {"x", box.x()}, {"y", box.y()}, {"width", box.width()},
+            {"height", box.height()}, {"fontSize", hit->size * scale}, {"anchor", hit->anchor},
+            {"color", hit->fill}, {"weight", hit->weight}, {"family", hit->family}};
+}
+bool Deck::editSvgLabel(const QString &path, int start, int end, const QString &raw,
+                        const QString &text) {
+    // Only a picture of this presentation, named by svgLabelAt, even if the selection moved on.
+    const QFileInfo info(path);
+    QFile file(path);
+    if (m_path.isEmpty() || info.suffix().toLower() != "svg" ||
+        !info.absoluteFilePath().startsWith(QDir(baseDir()).absolutePath() + '/') ||
+        !file.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray before = file.readAll();
+    const QString svg = QString::fromUtf8(before);
+    file.close();
+    // Someone else may have rewritten the file since the label was picked.
+    if (start < 0 || end < start || svg.mid(start, end - start) != raw) {
+        setStatus("The picture changed on disk; double-click the label again.");
+        return false;
+    }
+    SvgLabel label;
+    label.start = start;
+    label.end = end;
+    const QByteArray after = withSvgLabel(svg, label, text.simplified()).toUtf8();
+    if (after == before)
+        return true;
+    if (!writeMedia(path, after))
+        return false;
+    auto step = snapshot();
+    step.file = path;
+    step.before = before;
+    step.after = after;
+    m_undo.append(step);
+    if (m_undo.size() > 200)
+        m_undo.removeFirst();
+    m_redo.clear();
+    setStatus("Edited " + QDir(baseDir()).relativeFilePath(path));
+    return true;
+}
+bool Deck::writeMedia(const QString &path, const QByteArray &bytes) {
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+        setStatus(path + ": " + file.errorString());
+        return false;
+    }
+    // Redraw now rather than wait for the watcher, which may lose a file replaced on save.
+    m_mediaTimer.start();
+    return true;
+}
 QVector<int> Deck::exportedSlides() const {
     QVector<int> slides;
     for (int i = 0; i < count(); ++i)
@@ -525,14 +607,28 @@ void Deck::undo() {
     if (m_undo.isEmpty())
         return;
     auto state = m_undo.takeLast();
-    m_redo.append({m_source, m_selected, m_anchor, m_parsed});
+    if (!state.file.isEmpty()) {
+        if (writeMedia(state.file, state.before))
+            m_redo.append(state);
+        else
+            m_undo.append(state);
+        return;
+    }
+    m_redo.append(snapshot());
     apply(state.source, state.selected, false, state.anchor, &state.parsed);
 }
 void Deck::redo() {
     if (m_redo.isEmpty())
         return;
     auto state = m_redo.takeLast();
-    m_undo.append({m_source, m_selected, m_anchor, m_parsed});
+    if (!state.file.isEmpty()) {
+        if (writeMedia(state.file, state.after))
+            m_undo.append(state);
+        else
+            m_redo.append(state);
+        return;
+    }
+    m_undo.append(snapshot());
     apply(state.source, state.selected, false, state.anchor, &state.parsed);
 }
 void Deck::discoverThemes() {
