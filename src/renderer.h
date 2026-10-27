@@ -37,6 +37,9 @@ QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 QString speakerNotes(const QString &source);
+// The text with fenced and indented code, and inline code too unless told not to, blanked out,
+// so patterns only find what is written outside it.
+QString outsideCode(QString source, bool maskInline = true);
 // Build steps, written as pandoc writes them for beamer: a line of ". . ." pauses, and each
 // item of an incremental list (`incremental: true`, or inside ::: incremental) is a step.
 struct SlideSteps {

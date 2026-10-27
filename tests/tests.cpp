@@ -4,6 +4,7 @@
 #include "filedialog.h"
 #include "renderer.h"
 #include "images.h"
+#include "math.h"
 #include "syntax.h"
 #include <QApplication>
 #include <QAbstractTextDocumentLayout>
@@ -32,6 +33,7 @@
 #include <QQuickWindow>
 #include <QQuickItemGrabResult>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QScreen>
 #include <QSaveFile>
 #include <QScopeGuard>
@@ -1316,6 +1318,71 @@ static void write(const QString &path, const QString &content) {
         d.editSlide("# Changed");
         QCOMPARE(d.count(), 2);
         QCOMPARE(d.slide(1), QString("# Two\n"));
+    }
+    void mathFollowsPandocDollars() {
+        const auto spans = [](const QString &markdown) {
+            QVector<MathSpan> math;
+            const QString text = withoutMath(markdown, &math);
+            return qMakePair(text, math);
+        };
+        const auto [text, math] = spans("Energy $E = mc^2$ and $$\\int_0^1 x\\,dx$$ inline");
+        QCOMPARE(math.size(), 2);
+        QCOMPARE(math[0].tex, QString("E = mc^2"));
+        QVERIFY(!math[0].display);
+        QCOMPARE(math[1].tex, QString("\\int_0^1 x\\,dx"));
+        QVERIFY(math[1].display);
+        QVERIFY(!text.contains('$'));
+        QCOMPARE(text, QString("Energy ") + QChar(0xE000) + " and " + QChar(0xE001) + " inline");
+        // Markdown never reads what is inside: underscores and stars stay TeX.
+        QCOMPARE(spans("$a_1 * b_2$").second[0].tex, QString("a_1 * b_2"));
+        // Prices, padded dollars, a digit after the closing one, escapes, and code are not math.
+        QCOMPARE(spans("Costs $5 and $10").second.size(), 0);
+        QCOMPARE(spans("$ x$ and $x $").second.size(), 0);
+        QCOMPARE(spans("$x$5").second.size(), 0);
+        QCOMPARE(spans("\\$x\\$").second.size(), 0);
+        QCOMPARE(spans("`$x$`\n\n```\n$y$\n```\n").second.size(), 0);
+        // Display math alone on its lines becomes a paragraph of its own.
+        const auto own = spans("Before\n$$\na^2 + b^2\n$$\nAfter");
+        QCOMPARE(own.second[0].tex, QString("a^2 + b^2"));
+        QVERIFY(own.first.contains(QString("\n\n") + QChar(0xE000) + "\n\n"));
+    }
+    void mathIsTypesetByLatex() {
+        if (QStandardPaths::findExecutable("latex").isEmpty() || QStandardPaths::findExecutable("dvisvgm").isEmpty())
+            QSKIP("Needs latex and dvisvgm");
+        QTemporaryDir cache;
+        qputenv("XDG_CACHE_HOME", cache.path().toUtf8());
+        const auto restore = qScopeGuard([] { qunsetenv("XDG_CACHE_HOME"); });
+        const Formula formula = typesetFormula({"x_1^2", false}, false);
+        QVERIFY2(formula.error.isEmpty(), qPrintable(formula.error));
+        QVERIFY(!formula.outline.isEmpty());
+        // The baseline sits at y = 0: the subscript hangs below it.
+        QVERIFY(formula.box.top() < 0 && formula.box.bottom() > 0);
+        QCOMPARE(QDir(cache.filePath("hype/math")).entryList({"*.svg"}).size(), 1);
+        // Displayed, a sum is set larger than in a line.
+        QVERIFY(typesetFormula({"\\sum_{i=1}^n i", true}, false).box.height() >
+                typesetFormula({"\\sum_{i=1}^n i", false}, false).box.height());
+        // A bad formula carries LaTeX's complaint and its own source; its neighbors still typeset.
+        prepareFormulas({{"\\frac{1}{", false}, {"y^3", false}}, false);
+        QVERIFY(typesetFormula({"\\frac{1}{", false}, false).error.contains("in $\\frac{1}{$"));
+        QVERIFY(typesetFormula({"y^3", false}, false).error.isEmpty());
+        QCOMPARE(mathProblems("fine $a$ and broken $\\nope$").size(), 1);
+        // In a document, a formula is an object as wide as it is set; displayed, it is centered.
+        const QVariantMap palette{{"font", "sans"}, {"foreground", "#ffffff"}, {"accent", "#ff0000"}};
+        QTextDocument with, without, display;
+        layoutSlideText(with, "a $xxxxxx^2$ b", palette, 40, 1600, false, false);
+        layoutSlideText(without, "a  b", palette, 40, 1600, false, false);
+        QVERIFY(with.toPlainText().contains(QChar::ObjectReplacementCharacter));
+        QVERIFY(with.idealWidth() > without.idealWidth() + 40);
+        layoutSlideText(display, "Left\n\n$$\\int_0^1 x\\,dx$$\n", palette, 40, 1600, false, false);
+        QCOMPARE(display.lastBlock().blockFormat().alignment() & Qt::AlignHorizontal_Mask, Qt::AlignHCenter);
+        QCOMPARE(display.firstBlock().blockFormat().alignment() & Qt::AlignHorizontal_Mask, Qt::AlignLeft);
+        // A slide with math exports with every formula as vector outlines, not pictures.
+        Deck d;
+        d.editSource("# Math\n\nInline $\\alpha^2$ here\n\n$$\\int_0^1 x\\,dx$$\n");
+        QVERIFY(slideProblems(d.slide(0), d.baseDir()).isEmpty());
+        QTemporaryDir out;
+        QVERIFY(d.exportPdf(out.filePath("math.pdf")));
+        QVERIFY(!read(out.filePath("math.pdf")).contains("/Subtype /Image"));
     }
     void singleSlideEditorPadding() {
         Deck d;

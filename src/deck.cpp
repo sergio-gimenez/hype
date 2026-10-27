@@ -3,6 +3,7 @@
 #include "animationexport.h"
 #include "filedialog.h"
 #include "images.h"
+#include "math.h"
 #include "pptx.h"
 #include "renderer.h"
 #include <QGuiApplication>
@@ -727,6 +728,9 @@ QVariantMap Deck::palette() const {
         colors["header"] = header;
     if (scalar(m_parsed.header, "incremental") == "true")
         colors["incremental"] = true;
+    // Math follows beamer, in sans-serif unless the deck asks for its serif font theme.
+    if (scalar(m_parsed.header, "math_font") == "serif")
+        colors["math_font"] = "serif";
     m_paletteHeader = m_parsed.header;
     m_paletteCache = colors;
     return colors;
@@ -904,6 +908,7 @@ bool Deck::loadPath(const QString &path, bool remember) {
     m_redo.clear();
     m_externalChange = false;
     watch();
+    prefetchMath();
     notifyChanged();
     setStatus("Opened " + title());
     if (remember)
@@ -912,6 +917,15 @@ bool Deck::loadPath(const QString &path, bool remember) {
     if (!m_recoveryDirectory.isEmpty())
         checkpoint();
     return true;
+}
+// Typesets every formula in the deck in one LaTeX run, before each slide asks for its own.
+void Deck::prefetchMath() const {
+    QVector<MathSpan> math;
+    for (const auto &slide : m_parsed.slides)
+        withoutMath(parseMedia(slide.source, baseDir()).text, &math);
+    if (!math.isEmpty())
+        QThreadPool::globalInstance()->start(
+            [math, serif = palette().value("math_font").toString() == "serif"] { prepareFormulas(math, serif); });
 }
 bool Deck::validateStructure(const QString &operation) {
     const auto parsed = parseDeck(m_source);

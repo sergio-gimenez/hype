@@ -248,4 +248,5 @@ class Deck : public QAbstractListModel {
     State snapshot() const { return {m_source, m_selected, m_anchor, m_parsed, {}, {}, {}}; }
     QString editableSvg() const;
     bool writeMedia(const QString &path, const QByteArray &bytes);
+    void prefetchMath() const;
 };
